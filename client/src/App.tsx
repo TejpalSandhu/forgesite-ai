@@ -1,11 +1,12 @@
-import { Home, View } from 'lucide-react'
 import React from 'react'
 import { Route, Routes } from 'react-router-dom'
+import Home from './pages/Home'
 import Pricing from './pages/Pricing'
 import Projects from './pages/Projects'
 import MyProjects from './pages/MyProjects'
 import Preview from './pages/Preview'
 import Community from './pages/Community'
+import View from './pages/View'
 
 const App = () => {
   return (
