@@ -1,7 +1,7 @@
-import logo from './logo.svg';
+import ForgeSite from './ForgeSite.svg'
 
 export const assets = {
-    logo,
+    ForgeSite,
 };
 
 export const appPlans = [
