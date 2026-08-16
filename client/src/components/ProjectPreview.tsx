@@ -1,6 +1,7 @@
-import React, { forwardRef, useRef } from 'react'
+import React, { forwardRef, useRef, useState, useEffect } from 'react'
 import type { Project } from '../types';
 import { iframeScript } from '../assets/assets';
+import EditorPanel from './EditorPanel';
 
 interface ProjectPreviewProps {
     project: Project;
@@ -15,9 +16,11 @@ export interface ProjectPreviewRef {
 }
 
 
-const ProjectPreview = forwardRef<ProjectPreviewRef, ProjectPreviewProps>(({ project, isGenerating, device = 'desktop', showEditorPanel = true, ref }) => {
+const ProjectPreview = forwardRef<ProjectPreviewRef, ProjectPreviewProps>(({ project, isGenerating, device = 'desktop', showEditorPanel = true }, ref) => {
 
     const iframeRef = useRef<HTMLIFrameElement>(null)
+
+    const [selectedElement, setSelectedElement] = useState<any>(null)
 
     const resolutions = {
         phone: 'w-[412px]',
@@ -25,6 +28,28 @@ const ProjectPreview = forwardRef<ProjectPreviewRef, ProjectPreviewProps>(({ pro
         desktop: 'w-full'
 
     }
+
+    useEffect(() => {
+        const handleMesaage = (event: MessageEvent) => {
+            if (event.data.type === 'ELEMENT_SELECTED') {
+                setSelectedElement(event.data.payload);
+            } else if (event.data.type === 'CLEAR_SELECTION') {
+                setSelectedElement(null)
+            }
+        }
+        window.addEventListener('message', handleMesaage)
+        return () => window.removeEventListener('message', handleMesaage)
+    }, [])
+
+    const handleUpdate = (updates: any) => {
+        if (iframeRef.current?.contentWindow) {
+            iframeRef.current.contentWindow.postMessage({
+                type: 'UPDATE_ELEMENT',
+                payload: updates
+            }, '*')
+        }
+    }
+
 
     const injectPreview = (html: string) => {
         if (!html) return '';
@@ -47,6 +72,15 @@ const ProjectPreview = forwardRef<ProjectPreviewRef, ProjectPreviewProps>(({ pro
                             ref={iframeRef}
                             srcDoc={injectPreview(project.current_code)}
                             className={`h-full max-sm:w-full ${resolutions[device]} mx-auto transition-all`} />
+                        {showEditorPanel && selectedElement && (
+                            <EditorPanel selectedElement={selectedElement}
+                                onUpdate={handleUpdate} onClose={() => {
+                                    setSelectedElement(null);
+                                    if (iframeRef.current?.contentWindow) {
+                                        iframeRef.current.contentWindow.postMessage({ type: 'CLEAR_SELECTION_REQUEST' }, '*')
+                                    }
+                                }} />
+                        )}
                     </>
                 )
                 :
