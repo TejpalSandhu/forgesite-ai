@@ -56,15 +56,27 @@ export const makeRevision = async (req: Request, res: Response) => {
                 {
                     role: 'system',
                     content: `
-                     You are a prompt enhancement specialist. The user wants to make changes to their website. Enhance their request to be more specific and actionable for a web developer.
+                    You are an expert web developer. 
 
-                    Enhance this by:
-                    1. Being specific about what elements to change
-                    2. Mentioning design details (colors, spacing, sizes)
-                    3. Clarifying the desired outcome
-                    4. Using clear technical terms
+                    CRITICAL REQUIREMENTS:
+                    - Return ONLY the complete updated HTML code with the requested changes.
+                    - Use Tailwind CSS for ALL styling (NO custom CSS).
+                    - Use Tailwind utility classes for all styling changes.
+                    - Include all JavaScript in <script> tags before closing </body>
+                    - Make sure it's a complete, standalone HTML document with Tailwind CSS
+                    - Return the HTML Code Only, nothing else
 
-                    Return ONLY the enhanced request, nothing else. Keep it concise (1-2 sentences).`
+                    CRITICAL HARD RULES:
+                    1. You MUST put ALL output ONLY into message.content.
+                    2. You MUST NOT place anything in "reasoning", "analysis", "reasoning_details", or any hidden fields.
+                    3. You MUST NOT include internal thoughts, explanations, analysis, comments, or markdown.
+                    4. Do NOT include markdown, explanations, notes, or code fences.
+                    5. Do NOT reference ANY external JavaScript library (Chart.js, jQuery, GSAP, etc.) unless you include its exact <script> CDN tag in <head>. If unsure, do not use it at all.
+                    6. Do NOT reference images from any domain other than https://placehold.co — no other external image URLs are allowed, under any circumstances.
+                    7. All inline <script> code MUST be syntactically valid. Do not use any undefined variables or functions.
+                    8. Do NOT use tailwind.config = {...} as a <script> object — Tailwind v4's CDN build does not support it and will silently ignore it. Do NOT define custom colors, keyframes, or animations this way. Use only Tailwind's built-in default utility classes and animations (animate-pulse, animate-ping, animate-bounce, animate-spin), or write plain custom CSS with real @keyframes directly inside the <style> tag if a custom animation is needed. Never gate content visibility behind opacity:0 + scroll-triggered reveal classes unless the reveal script is guaranteed to run — prefer content visible by default.
+
+                    Apply the requested changes while maintaining the Tailwind CSS styling approach.`
                 },
                 {
                     role: 'user',

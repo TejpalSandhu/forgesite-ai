@@ -21,7 +21,7 @@ const LoaderSteps = () => {
         return () => clearInterval(interval)
     }, [])
 
-    const icon = steps[current].icon
+    const Icon = steps[current].icon
 
 
     return (

@@ -11,6 +11,7 @@ import Navbar from './components/Navbar'
 import { Toaster } from 'sonner'
 import AuthPage from './pages/auth/AuthPage'
 import Settings from './pages/Settings'
+import Footer from './components/Footer'
 
 
 
@@ -21,6 +22,10 @@ const App = () => {
   const hideNavbar = pathname.startsWith('/projects/') && pathname !== '/projects'
     || pathname.startsWith('/view/')
     || pathname.startsWith('/preview/')
+
+  const hideFooter = hideNavbar
+    || pathname.startsWith('/auth/')
+
 
   return (
     <div>
@@ -38,6 +43,7 @@ const App = () => {
         <Route path="/auth/:pathname" element={<AuthPage />} />
         <Route path="/account/settings" element={<Settings />} />
       </Routes>
+      {!hideFooter && <Footer />}
     </div>
   )
 }

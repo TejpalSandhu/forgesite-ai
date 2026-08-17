@@ -39,7 +39,6 @@ export const createUserProject = async (req: Request, res: Response) => {
             return res.status(403).json({ message: 'add credits to create more projects' });
         }
 
-        // Create a new project
         const project = await prisma.websiteProject.create({
             data: {
                 name: initial_prompt.length > 50 ? initial_prompt.substring(0, 47) + '...' : initial_prompt,
@@ -48,7 +47,6 @@ export const createUserProject = async (req: Request, res: Response) => {
             }
         })
 
-        // Update User's Total Creation
         await prisma.user.update({
             where: { id: userId },
             data: { totalCreation: { increment: 1 } }
@@ -69,7 +67,20 @@ export const createUserProject = async (req: Request, res: Response) => {
 
         res.json({ projectId: project.id })
 
-        //Enhance user prompt
+        generateWebsite(project.id, userId, initial_prompt).catch((err) => {
+            console.error('Background generation failed:', err);
+        });
+
+    } catch (error: any) {
+        console.log(error);
+        if (!res.headersSent) {
+            res.status(500).json({ message: error.message });
+        }
+    }
+}
+
+async function generateWebsite(projectId: string, userId: string, initial_prompt: string) {
+    try {
         const promptEnhanceResponse = await openai.chat.completions.create({
             model: 'z-ai/glm-5.2:free',
             messages: [
@@ -101,7 +112,7 @@ export const createUserProject = async (req: Request, res: Response) => {
             data: {
                 role: 'assistant',
                 content: `I've enhanced your prompt to: "${enhancedPrompt}"`,
-                projectId: project.id
+                projectId
             }
         })
 
@@ -109,11 +120,10 @@ export const createUserProject = async (req: Request, res: Response) => {
             data: {
                 role: 'assistant',
                 content: 'now generating your website...',
-                projectId: project.id
+                projectId
             }
         })
 
-        // Generate website code
         const codeGenerationResponse = await openai.chat.completions.create({
             model: 'z-ai/glm-5.2:free',
             messages: [
@@ -142,8 +152,12 @@ export const createUserProject = async (req: Request, res: Response) => {
                     2. You MUST NOT place anything in "reasoning", "analysis", "reasoning_details", or any hidden fields.
                     3. You MUST NOT include internal thoughts, explanations, analysis, comments, or markdown.
                     4. Do NOT include markdown, explanations, notes, or code fences.
+                    5. Do NOT reference ANY external JavaScript library (Chart.js, jQuery, GSAP, etc.) unless you include its exact <script> CDN tag in <head>. If unsure, do not use it at all.
+                    6. Do NOT reference images from any domain other than https://placehold.co — no other external image URLs are allowed, under any circumstances.
+                    7. All inline <script> code MUST be syntactically valid. Do not use any undefined variables or functions.
 
-                    The HTML should be complete and ready to render as-is with Tailwind CSS.`
+                    The HTML should be complete and ready to render as-is with Tailwind CSS.
+                    8. Do NOT use tailwind.config = {...} as a <script> object — Tailwind v4's CDN build does not support it and will silently ignore it. Do NOT define custom colors, keyframes, or animations this way. Use only Tailwind's built-in default utility classes and animations (animate-pulse, animate-ping, animate-bounce, animate-spin), or write plain custom CSS with real @keyframes directly inside the <style> tag if a custom animation is needed. Never gate initial content visibility behind opacity:0 + scroll-triggered reveal classes unless the reveal script is guaranteed to run — prefer content visible by default.`
                 },
                 {
                     role: 'user',
@@ -152,7 +166,6 @@ export const createUserProject = async (req: Request, res: Response) => {
             ]
         })
 
-
         const code = codeGenerationResponse.choices[0].message.content || '';
 
         if (!code) {
@@ -160,7 +173,7 @@ export const createUserProject = async (req: Request, res: Response) => {
                 data: {
                     role: 'assistant',
                     content: "Unable to generate the code, please try again",
-                    projectId: project.id
+                    projectId
                 }
             })
             await prisma.user.update({
@@ -170,14 +183,11 @@ export const createUserProject = async (req: Request, res: Response) => {
             return;
         }
 
-        // Create Version for the project
         const version = await prisma.version.create({
             data: {
-                code: code.replace(/```[a-z]*\n?/gi, '')
-                    .replace(/```$/g, '')
-                    .trim(),
+                code: code.replace(/```[a-z]*\n?/gi, '').replace(/```$/g, '').trim(),
                 description: 'Initial version',
-                projectId: project.id
+                projectId
             }
         })
 
@@ -185,27 +195,31 @@ export const createUserProject = async (req: Request, res: Response) => {
             data: {
                 role: 'assistant',
                 content: "I've created your website! You can now preview it and request any changes.",
-                projectId: project.id
+                projectId
             }
         })
 
         await prisma.websiteProject.update({
-            where: { id: project.id },
+            where: { id: projectId },
             data: {
-                current_code: code.replace(/```[a-z]*\n?/gi, '')
-                    .replace(/```$/g, '')
-                    .trim(),
+                current_code: code.replace(/```[a-z]*\n?/gi, '').replace(/```$/g, '').trim(),
                 current_version_index: version.id
             }
         })
 
     } catch (error: any) {
+        console.error('Generation error:', error);
         await prisma.user.update({
             where: { id: userId },
             data: { credits: { increment: 5 } }
         })
-        console.log(error);
-        res.status(500).json({ message: error.message });
+        await prisma.conversation.create({
+            data: {
+                role: 'assistant',
+                content: "Sorry, something went wrong generating your website. Your credits have been refunded — please try again.",
+                projectId
+            }
+        })
     }
 }
 

@@ -12,6 +12,7 @@ export const protect = async (req: Request, res: Response, next: NextFunction) =
             return res.status(401).json({ message: 'Unauthorized user' })
         }
         req.userId = session.user.id;
+        next();
 
     } catch (error: any) {
         console.log(error);
