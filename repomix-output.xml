@@ -68,6 +68,7 @@ client/src/main.tsx
 client/src/pages/auth/AuthPage.tsx
 client/src/pages/Community.tsx
 client/src/pages/Home.tsx
+client/src/pages/Loading.tsx
 client/src/pages/MyProjects.tsx
 client/src/pages/Preview.tsx
 client/src/pages/Pricing.tsx
@@ -154,6 +155,7 @@ server/.agents/skills/prisma-upgrade-v7/SKILL.md
 server/.gitignore
 server/configs/openai.ts
 server/controllers/projectController.ts
+server/controllers/stripeWebhook.ts
 server/controllers/userController.ts
 server/lib/auth.ts
 server/lib/prisma.ts
@@ -174,15 +176,88 @@ server/types/express.d.ts
 <files>
 This section contains the contents of the repository's files.
 
-<file path="client/src/configs/axios.ts">
-import axios from 'axios';
+<file path="client/src/pages/Loading.tsx">
+import { Loader2Icon } from 'lucide-react'
+import { useEffect } from 'react'
 
-const api = axios.create({
-    baseURL: import.meta.env.VITE_BASEURL || 'http://localhost:3000',
-    withCredentials: true
-})
+const Loading = () => {
 
-export default api
+    useEffect(() => {
+        setTimeout(() => {
+            window.location.href = '/'
+        }, 6000)
+    }, [])
+
+    return (
+        <div className='h-screen flex flex-col'>
+            <div className='flex items-center justify-center flex-1'>
+                <Loader2Icon className='size-7 animate-spin text-indigo-200' />
+            </div>
+        </div>
+    )
+}
+
+export default Loading
+</file>
+
+<file path="server/controllers/stripeWebhook.ts">
+import { Request, Response } from 'express';
+import Stripe from 'stripe';
+import prisma from '../lib/prisma.js';
+
+export const stripeWebhook = async (request: Request, response: Response) => {
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string)
+    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET as string;
+
+    if (endpointSecret) {
+        // Get the signature sent by Stripe
+        const signature = request.headers['stripe-signature'] as string;
+
+        let event;
+
+        try {
+            event = stripe.webhooks.constructEvent(
+                request.body,
+                signature,
+                endpointSecret
+            );
+        } catch (err: any) {
+            console.log(`⚠️ Webhook signature verification failed.`, err.message);
+            return response.sendStatus(400);
+        }
+        // Handle the event
+        switch (event.type) {
+            case 'payment_intent.succeeded':
+                const paymentIntent = event.data.object;
+                const sessionList = await stripe.checkout.sessions.list({
+                    payment_intent: paymentIntent.id
+                })
+
+                const session = sessionList.data[0];
+                const { transactionId, appId } = session.metadata as { transactionId: string; appId: string }
+
+                if (appId === 'ForgeSite' && transactionId) {
+                    const transaction = await prisma.transaction.update({
+                        where: { id: transactionId },
+                        data: { isPaid: true }
+                    })
+
+                    // Add the credits to the user data
+                    await prisma.user.update({
+                        where: { id: transaction.userId },
+                        data: { credits: { increment: transaction.credits } }
+                    })
+                }
+                break;
+
+            default:
+                console.log(`Unhandled event type ${event.type}`);
+        }
+
+        // Return a response to acknowledge receipt of the event
+        response.json({ received: true });
+    }
+}
 </file>
 
 <file path="client/.env">
@@ -484,230 +559,12 @@ model Verification {
 const Footer = () => {
     return (
         <div className='text-center py-4 text-gray-400 text-sm border-t border-gray-800 mt-24'>
-            <p>Copyright © 2025 AI Website Builder - GreatStack</p>
+            <p>Copyright © 2026 ForgeSite - Tejpal Sandhu</p>
         </div>
     )
 }
 
 export default Footer
-</file>
-
-<file path="client/src/components/LoaderSteps.tsx">
-import { CircleIcon, ScanLineIcon, SquareIcon, TriangleIcon } from "lucide-react"
-import { useEffect, useState } from "react"
-
-const steps = [
-    { icon: ScanLineIcon, label: "Analyzing your request…" },
-    { icon: SquareIcon, label: "Generating layout structure…" },
-    { icon: TriangleIcon, label: "Assembling UI components…" },
-    { icon: CircleIcon, label: "Finalizing your website…" },
-]
-
-const STEP_DURATION = 45000
-const LoaderSteps = () => {
-
-    const [current, setCurrent] = useState(0)
-
-    useEffect(() => {
-        const interval = setInterval(() => {
-            setCurrent((s) => (s + 1) % steps.length)
-
-        }, STEP_DURATION);
-        return () => clearInterval(interval)
-    }, [])
-
-    const Icon = steps[current].icon
-
-
-    return (
-        <div className="w-full h-full flex flex-col items-center justify-center bg-gray-950 relative overflow-hidden text-white">
-            <div className="absolute inset-0 bg-linear-to-br from-blue-500/10 via-purple-500/10 to-fuchsia-500/10 blur-3xl animate-pulse"></div>
-
-            <div className="relative z-10 w-32 h-32 flex items-center justify-center">
-                <div className="absolute inset-0 rounded-full border border-indigo-400 animate-ping opacity-30" />
-                <div className="absolute inset-4 rounded-full border border-purple-400/20" />
-                <Icon className="w-8 h-8 text-white opacity-80 animate-bounce" />
-            </div>
-            {/* Step label – fade using transition only (no invisible start) */}
-            <p key={current} className="mt-8 text-lg font-light text-white/90 tracking-wide transition-all duration-700 ease-in-out opacity-100">{steps[current].label}</p>
-
-            <p className="text-xs text-gray-400 mt-2 transition-opacity duration-700 opacity-100">This may take around 2-3 minutes…</p>
-        </div>
-    )
-}
-
-export default LoaderSteps
-</file>
-
-<file path="client/src/components/Sidebar.tsx">
-import React, { useEffect, useRef, useState } from 'react'
-import type { Message, Project, Version } from '../types';
-import { BotIcon, EyeIcon, Loader2Icon, SendIcon, UserIcon } from 'lucide-react';
-import { Link } from 'react-router-dom';
-import api from '@/configs/axios';
-
-interface SidebarProps {
-    isMenuOpen: boolean;
-    project: Project;
-    setProject: (project: Project) => void;
-    isGenerating: boolean;
-    setIsGenerating: (isGenerating: boolean) => void;
-
-}
-
-const Sidebar = ({ isMenuOpen, project, setProject, isGenerating, setIsGenerating }: SidebarProps) => {
-
-    const messageRef = useRef<HTMLDivElement>(null)
-
-    const [input, setInput] = useState('')
-
-    const fetchProject = async () => {
-        try {
-            const { data } = await api.get(`/api/user/project/${project.id}`)
-            setProject(data.project)
-        } catch (error: any) {
-            toast.error(error?.response?.data?.message || error.message);
-            console.log(error);
-        }
-    }
-
-    const handleRollback = async (versionId: string) => {
-        try {
-            const confirm = window.confirm('Are you sure you want to rollback to this version?')
-            if (!confirm) return;
-            setIsGenerating(true)
-            const { data } = await api.get(`/api/project/rollback/${project.id}/${versionId}`);
-            const { data: data2 } = await api.get(`/api/user/project/${project.id}`);
-            toast.success(data.message)
-            setProject(data2.project)
-            setIsGenerating(false)
-
-        } catch (error: any) {
-            setIsGenerating(false)
-            toast.error(error?.response?.data?.message || error.message);
-            console.log(error);
-        }
-    }
-
-    const handleRevisions = async (e: React.FormEvent) => {
-        e.preventDefault()
-        let interval: number | undefined;
-        try {
-            setIsGenerating(true);
-            interval = setInterval(() => {
-                fetchProject();
-            }, 10000)
-            const { data } = await api.post(`/api/project/revision/${project.id}`, { message: input });
-            fetchProject();
-            toast.success(data.message)
-            setInput('')
-            clearInterval(interval)
-            setIsGenerating(false)
-
-        } catch (error: any) {
-            setIsGenerating(false)
-            toast.error(error?.response?.data?.message || error.message);
-            console.log(error);
-            clearInterval(interval)
-
-        }
-
-    }
-
-    useEffect(() => {
-        if (messageRef.current) {
-            messageRef.current.scrollIntoView({ behavior: 'smooth' })
-        }
-    }, [project.conversation.length, isGenerating])
-
-
-    return (
-        <div className={`h-full  sm:max-w-sm rounded-xl bg-gray-900 border-gray-800 transition-all ${isMenuOpen ? 'max-sm:w-0 overflow-hidden' : 'w-full'}`}>
-            <div className='flex flex-col h-full'>
-                {/* Messages container */}
-                <div className='flex-1 overflow-y-auto no-scrollbar px-3 flex flex-col gap-4'>
-                    {[...project.conversation, ...project.versions]
-                        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()).map((message) => {
-                            const isMessage = 'content' in message;
-
-                            if (isMessage) {
-                                const msg = message as Message;
-                                const isUser = msg.role === 'user';
-                                return (
-                                    <div key={msg.id} className={`flex items-start gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
-                                        {!isUser && (
-                                            <div className='w-8 h-8 rounded-full bg-linear-to-br from-indigo-600 to-indigo-700 flex items-center justify-center'>
-                                                <BotIcon className='size-5 text-white' />
-                                            </div>
-                                        )}
-                                        <div className={`max-w-[80%] p-2 px-4 rounded-2xl shadow-sm text-sm mt-5 leading-relaxed ${isUser ? "bg-linear-to-r from-indigo-500 to-indigo-600 text-white rounded-tr-none" : "rounded-tl-none bg-gray-800 text-gray-100"}`}>
-                                            {msg.content}
-                                        </div>
-                                        {isUser && (
-                                            <div className='w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center'>
-                                                <UserIcon className='size-5 text-gray-200' />
-                                            </div>
-                                        )}
-                                    </div>
-                                )
-                            } else {
-                                const ver = message as Version;
-                                return (
-                                    <div key={ver.id} className='w-4/5 mx-auto my-2 p-3 rounded-xl bg-gray-800 text-gray-100 shadow flex flex-col gap-2'>
-                                        <div className='text-xs font-medium'>
-                                            code updated <br />
-                                            <span className='text-gray-500 text-xs font-normal'>
-                                                {new Date(ver.timestamp).toLocaleString()}
-                                            </span>
-                                        </div>
-                                        <div className='flex items-center justify-between'>
-                                            {project.current_version_index === ver.id ? (
-                                                <button className='px-3 py-1 rounded-md text-xs bg-gray-700'>Current version</button>
-                                            ) : (
-                                                <button onClick={() => handleRollback(ver.id)} className='px-3 py-1 rounded-md text-xs bg-indigo-500 hover:bg-indigo-600 text-white'>Roll back to this version</button>
-                                            )}
-                                            <Link target='_blank' to={`/preview/${project.id}/${ver.id}`}>
-                                                <EyeIcon className='size-6 p-1 bg-gray-700 hover:bg-indigo-500 transition-colors rounded' />
-                                            </Link>
-                                        </div>
-                                    </div>
-                                )
-                            }
-                        })}
-                    {isGenerating && (
-                        <div className='flex items-start gap-3 justify-start'>
-                            <div className='w-8 h-8 rounded-full bg-linear-to-br from-indigo-600 to-indigo-700 flex items-center justify-center'>
-                                <BotIcon className='size-5 text-white' />
-                            </div>
-                            {/* three dot loader */}
-                            <div className='flex gap-1.5 h-full items-end'>
-                                <span className='size-2 rounded-full animate-bounce bg-gray-600' style={{ animationDelay: '0s' }} />
-                                <span className='size-2 rounded-full animate-bounce bg-gray-600' style={{ animationDelay: '0.2s' }} />
-                                <span className='size-2 rounded-full animate-bounce bg-gray-600' style={{ animationDelay: '0.4s' }} />
-                            </div>
-                        </div>
-                    )
-
-                    }
-                    <div ref={messageRef} />
-                </div>
-                {/* Input area */}
-                <form onSubmit={handleRevisions} className='m-3 relative'>
-                    <div className='flex items-center gap-2'>
-                        <textarea onChange={(e) => setInput(e.target.value)} value={input} rows={4} placeholder='Describe your website or request changes...' className='flex-1 p-3 rounded-xl resize-none text-sm outline-none ring ring-gray-700 focus:ring-indigo-500 bg-gray-800 text-gray-100 placeholder-gray-400 transition-all' disabled={isGenerating} />
-                        <button disabled={isGenerating || !input.trim()} className='absolute bottom-2.5 right-2.5 rounded-full bg-linear-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white transition-colors disabled:opacity-60'>
-                            {isGenerating
-                                ? <Loader2Icon className='size-7 p-1.5 animate-spin text-white' />
-                                : <SendIcon className='size-7 p-1.5 text-white' />}
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    )
-}
-
-export default Sidebar
 </file>
 
 <file path="client/src/components/ui/button.tsx">
@@ -769,6 +626,17 @@ function Button({
 }
 
 export { Button, buttonVariants }
+</file>
+
+<file path="client/src/configs/axios.ts">
+import axios from 'axios';
+
+const api = axios.create({
+    baseURL: import.meta.env.VITE_BASEURL || 'http://localhost:3000',
+    withCredentials: true
+})
+
+export default api
 </file>
 
 <file path="client/src/lib/auth-client.ts">
@@ -11973,657 +11841,6 @@ const openai = new OpenAI({
 export default openai;
 </file>
 
-<file path="server/controllers/projectController.ts">
-import { Request, Response } from 'express'
-import prisma from '../lib/prisma.js';
-import openai from '../configs/openai.js';
-
-// Controller Function to Make Revision
-export const makeRevision = async (req: Request, res: Response) => {
-    const userId = req.userId;
-
-    try {
-
-        const { projectId } = req.params;
-        const { message } = req.body;
-
-        const user = await prisma.user.findUnique({
-            where: { id: userId }
-        })
-
-        if (!userId || !user) {
-            return res.status(401).json({ message: 'Unauthorized' });
-        }
-
-        if (user.credits < 5) {
-            return res.status(403).json({ message: 'add more credits to make changes' });
-        }
-
-        if (!message || message.trim() === '') {
-            return res.status(400).json({ message: 'Please enter a valid prompt' });
-        }
-
-        const currentProject = await prisma.websiteProject.findUnique({
-            where: { id: projectId, userId },
-            include: { versions: true }
-        })
-
-        if (!currentProject) {
-            return res.status(404).json({ message: 'Project not found' });
-        }
-
-        await prisma.conversation.create({
-            data: {
-                role: 'user',
-                content: message,
-                projectId
-            }
-        })
-
-        await prisma.user.update({
-            where: { id: userId },
-            data: { credits: { decrement: 5 } }
-        })
-
-        // Enhance user prompt
-        const promptEnhanceResponse = await openai.chat.completions.create({
-            model: 'z-ai/glm-5.2:free',
-            messages: [
-                {
-                    role: 'system',
-                    content: `
-                     You are a prompt enhancement specialist. The user wants to make changes to their website. Enhance their request to be more specific and actionable for a web developer.
-
-                    Enhance this by:
-                    1. Being specific about what elements to change
-                    2. Mentioning design details (colors, spacing, sizes)
-                    3. Clarifying the desired outcome
-                    4. Using clear technical terms
-
-                    Return ONLY the enhanced request, nothing else. Keep it concise (1-2 sentences).`
-                },
-                {
-                    role: 'user',
-                    content: `User's request: "${message}"`
-                }
-            ]
-        })
-
-        const enhancedPrompt = promptEnhanceResponse.choices[0].message.content;
-
-        await prisma.conversation.create({
-            data: {
-                role: 'assistant',
-                content: `I've enhanced your prompt to: "${enhancedPrompt}"`,
-                projectId
-            }
-        })
-        await prisma.conversation.create({
-            data: {
-                role: 'assistant',
-                content: 'Now making changes to your website...',
-                projectId
-            }
-        })
-
-        // Generate website code
-        const codeGenerationResponse = await openai.chat.completions.create({
-            model: 'z-ai/glm-5.2:free',
-            messages: [
-                {
-                    role: 'system',
-                    content: `
-                    You are an expert web developer. 
-
-                    CRITICAL REQUIREMENTS:
-                    - Return ONLY the complete updated HTML code with the requested changes.
-                    - Use Tailwind CSS for ALL styling (NO custom CSS).
-                    - Use Tailwind utility classes for all styling changes.
-                    - Include all JavaScript in <script> tags before closing </body>
-                    - Make sure it's a complete, standalone HTML document with Tailwind CSS
-                    - Return the HTML Code Only, nothing else
-
-                    Apply the requested changes while maintaining the Tailwind CSS styling approach.`
-                },
-                {
-                    role: 'user',
-                    content: `
-                    Here is the current website code: "${currentProject.current_code}" The user wants this change: "${enhancedPrompt}"`
-                }
-            ]
-        })
-
-        const code = codeGenerationResponse.choices[0].message.content || '';
-
-        if (!code) {
-            await prisma.conversation.create({
-                data: {
-                    role: 'assistant',
-                    content: "Unable to generate the code, please try again",
-                    projectId
-                }
-            })
-            await prisma.user.update({
-                where: { id: userId },
-                data: { credits: { increment: 5 } }
-            })
-            return;
-        }
-
-        const version = await prisma.version.create({
-            data: {
-                code: code.replace(/```[a-z]*\n?/gi, '')
-                    .replace(/```$/g, '')
-                    .trim(),
-                description: 'changes made',
-                projectId
-            }
-        })
-
-        await prisma.conversation.create({
-            data: {
-                role: 'assistant',
-                content: "I've made the changes to your website! You can now preview it",
-                projectId
-            }
-        })
-
-        await prisma.websiteProject.update({
-            where: { id: projectId },
-            data: {
-                current_code: code.replace(/```[a-z]*\n?/gi, '')
-                    .replace(/```$/g, '')
-                    .trim(),
-                current_version_index: version.id
-            }
-        })
-
-
-        res.json({ message: 'Changes made successfully' })
-    } catch (error: any) {
-        await prisma.user.update({
-            where: { id: userId },
-            data: { credits: { increment: 5 } }
-        })
-        console.log(error.code || error.message);
-        res.status(500).json({ message: error.message });
-    }
-}
-
-// Controller Function to rollback to a specific version
-export const rollbackToVersion = async (req: Request, res: Response) => {
-    try {
-        const userId = req.userId;
-        if (!userId) {
-            return res.status(401).json({ message: 'Unauthorized' });
-        }
-        const { projectId, versionId } = req.params;
-
-        const project = await prisma.websiteProject.findUnique({
-            where: { id: projectId, userId },
-            include: { versions: true }
-        })
-
-        if (!project) {
-            return res.status(404).json({ message: 'Project not found' });
-        }
-
-        const version = project.versions.find((version) => version.id === versionId);
-
-        if (!version) {
-            return res.status(404).json({ message: 'Version not found' });
-        }
-
-        await prisma.websiteProject.update({
-            where: { id: projectId, userId },
-            data: {
-                current_code: version.code,
-                current_version_index: version.id
-            }
-        })
-
-        await prisma.conversation.create({
-            data: {
-                role: 'assistant',
-                content: "I've rolled back your website to selected version. You can now preview it",
-                projectId
-            }
-        })
-
-        res.json({ message: 'Version rolled back' });
-    } catch (error: any) {
-        console.log(error.code || error.message);
-        res.status(500).json({ message: error.message });
-    }
-}
-
-// Controller Function to Delete a Project
-export const deleteProject = async (req: Request, res: Response) => {
-    try {
-        const userId = req.userId;
-        const { projectId } = req.params;
-
-        await prisma.websiteProject.delete({
-            where: { id: projectId, userId },
-        })
-
-        res.json({ message: 'Project deleted successfully' });
-    } catch (error: any) {
-        console.log(error.code || error.message);
-        res.status(500).json({ message: error.message });
-    }
-}
-
-// Controller for getting project code for preview
-export const getProjectPreview = async (req: Request, res: Response) => {
-    try {
-        const userId = req.userId;
-        const { projectId } = req.params;
-
-        if (!userId) {
-            return res.status(401).json({ message: 'Unauthorized' });
-        }
-
-        const project = await prisma.websiteProject.findFirst({
-            where: { id: projectId, userId },
-            include: { versions: true }
-        })
-
-        if (!project) {
-            return res.status(404).json({ message: 'Project not found' });
-        }
-
-        res.json({ project });
-    } catch (error: any) {
-        console.log(error.code || error.message);
-        res.status(500).json({ message: error.message });
-    }
-}
-
-// Get published projects
-export const getPublishedProjects = async (req: Request, res: Response) => {
-    try {
-
-        const projects = await prisma.websiteProject.findMany({
-            where: { isPublished: true },
-            include: { user: true }
-        })
-
-        res.json({ projects });
-    } catch (error: any) {
-        console.log(error.code || error.message);
-        res.status(500).json({ message: error.message });
-    }
-}
-
-// Get a single project by id
-export const getProjectById = async (req: Request, res: Response) => {
-    try {
-        const { projectId } = req.params;
-
-        const project = await prisma.websiteProject.findFirst({
-            where: { id: projectId },
-        })
-
-        if (!project || project.isPublished === false || !project?.current_code) {
-            return res.status(404).json({ message: 'Project not found' });
-        }
-
-        res.json({ code: project.current_code });
-    } catch (error: any) {
-        console.log(error.code || error.message);
-        res.status(500).json({ message: error.message });
-    }
-}
-
-// Controller to save project code
-export const saveProjectCode = async (req: Request, res: Response) => {
-    try {
-        const userId = req.userId;
-        const { projectId } = req.params;
-        const { code } = req.body;
-
-        if (!userId) {
-            return res.status(401).json({ message: 'Unauthorized' });
-        }
-
-        if (!code) {
-            return res.status(400).json({ message: 'Code is required' });
-        }
-
-        const project = await prisma.websiteProject.findUnique({
-            where: { id: projectId, userId }
-        })
-
-        if (!project) {
-            return res.status(404).json({ message: 'Project not found' });
-        }
-
-        await prisma.websiteProject.update({
-            where: { id: projectId },
-            data: { current_code: code, current_version_index: '' }
-        })
-
-        res.json({ message: 'Project saved successfully' });
-    } catch (error: any) {
-        console.log(error.code || error.message);
-        res.status(500).json({ message: error.message });
-    }
-}
-</file>
-
-<file path="server/controllers/userController.ts">
-import { Request, Response } from 'express'
-import prisma from '../lib/prisma.js';
-import openai from '../configs/openai.js';
-
-// Get User Credits
-export const getUserCredits = async (req: Request, res: Response) => {
-    try {
-        const userId = req.userId;
-        if (!userId) {
-            return res.status(401).json({ message: 'Unauthorized' });
-        }
-
-        const user = await prisma.user.findUnique({
-            where: { id: userId }
-        })
-
-        res.json({ credits: user?.credits })
-    } catch (error: any) {
-        console.log(error.code || error.message);
-        res.status(500).json({ message: error.message });
-    }
-}
-
-// Controller Function to create New Project
-export const createUserProject = async (req: Request, res: Response) => {
-    const userId = req.userId;
-    try {
-        const { initial_prompt } = req.body;
-
-        if (!userId) {
-            return res.status(401).json({ message: 'Unauthorized' });
-        }
-
-        const user = await prisma.user.findUnique({
-            where: { id: userId }
-        })
-
-        if (user && user.credits < 5) {
-            return res.status(403).json({ message: 'add credits to create more projects' });
-        }
-
-        const project = await prisma.websiteProject.create({
-            data: {
-                name: initial_prompt.length > 50 ? initial_prompt.substring(0, 47) + '...' : initial_prompt,
-                initial_prompt,
-                userId
-            }
-        })
-
-        await prisma.user.update({
-            where: { id: userId },
-            data: { totalCreation: { increment: 1 } }
-        })
-
-        await prisma.conversation.create({
-            data: {
-                role: 'user',
-                content: initial_prompt,
-                projectId: project.id
-            }
-        })
-
-        await prisma.user.update({
-            where: { id: userId },
-            data: { credits: { decrement: 5 } }
-        })
-
-        res.json({ projectId: project.id })
-
-        generateWebsite(project.id, userId, initial_prompt).catch((err) => {
-            console.error('Background generation failed:', err);
-        });
-
-    } catch (error: any) {
-        console.log(error);
-        if (!res.headersSent) {
-            res.status(500).json({ message: error.message });
-        }
-    }
-}
-
-async function generateWebsite(projectId: string, userId: string, initial_prompt: string) {
-    try {
-        const promptEnhanceResponse = await openai.chat.completions.create({
-            model: 'z-ai/glm-5.2:free',
-            messages: [
-                {
-                    role: 'system',
-                    content: `
-                    You are a prompt enhancement specialist. Take the user's website request and expand it into a detailed, comprehensive prompt that will help create the best possible website.
-
-                    Enhance this prompt by:
-                    1. Adding specific design details (layout, color scheme, typography)
-                    2. Specifying key sections and features
-                    3. Describing the user experience and interactions
-                    4. Including modern web design best practices
-                    5. Mentioning responsive design requirements
-                    6. Adding any missing but important elements
-
-                    Return ONLY the enhanced prompt, nothing else. Make it detailed but concise (2-3 paragraphs max).`
-                },
-                {
-                    role: 'user',
-                    content: initial_prompt
-                }
-            ]
-        })
-
-        const enhancedPrompt = promptEnhanceResponse.choices[0].message.content;
-
-        await prisma.conversation.create({
-            data: {
-                role: 'assistant',
-                content: `I've enhanced your prompt to: "${enhancedPrompt}"`,
-                projectId
-            }
-        })
-
-        await prisma.conversation.create({
-            data: {
-                role: 'assistant',
-                content: 'now generating your website...',
-                projectId
-            }
-        })
-
-        const codeGenerationResponse = await openai.chat.completions.create({
-            model: 'z-ai/glm-5.2:free',
-            messages: [
-                {
-                    role: 'system',
-                    content: `
-                     You are an expert web developer. Create a complete, production-ready, single-page website based on this request: "${enhancedPrompt}"
-
-                    CRITICAL REQUIREMENTS:
-                    - You MUST output valid HTML ONLY. 
-                    - Use Tailwind CSS for ALL styling
-                    - Include this EXACT script in the <head>: <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-                    - Use Tailwind utility classes extensively for styling, animations, and responsiveness
-                    - Make it fully functional and interactive with JavaScript in <script> tag before closing </body>
-                    - Use modern, beautiful design with great UX using Tailwind classes
-                    - Make it responsive using Tailwind responsive classes (sm:, md:, lg:, xl:)
-                    - Use Tailwind animations and transitions (animate-*, transition-*)
-                    - Include all necessary meta tags
-                    - Use Google Fonts CDN if needed for custom fonts
-                    - Use placeholder images from https://placehold.co/600x400
-                    - Use Tailwind gradient classes for beautiful backgrounds
-                    - Make sure all buttons, cards, and components use Tailwind styling
-
-                    CRITICAL HARD RULES:
-                    1. You MUST put ALL output ONLY into message.content.
-                    2. You MUST NOT place anything in "reasoning", "analysis", "reasoning_details", or any hidden fields.
-                    3. You MUST NOT include internal thoughts, explanations, analysis, comments, or markdown.
-                    4. Do NOT include markdown, explanations, notes, or code fences.
-                    5. Do NOT reference ANY external JavaScript library (Chart.js, jQuery, GSAP, etc.) unless you include its exact <script> CDN tag in <head>. If unsure, do not use it at all.
-                    6. Do NOT reference images from any domain other than https://placehold.co — no other external image URLs are allowed, under any circumstances.
-                    7. All inline <script> code MUST be syntactically valid. Do not use any undefined variables or functions.
-
-                    The HTML should be complete and ready to render as-is with Tailwind CSS.`
-                },
-                {
-                    role: 'user',
-                    content: enhancedPrompt || ''
-                }
-            ]
-        })
-
-        const code = codeGenerationResponse.choices[0].message.content || '';
-
-        if (!code) {
-            await prisma.conversation.create({
-                data: {
-                    role: 'assistant',
-                    content: "Unable to generate the code, please try again",
-                    projectId
-                }
-            })
-            await prisma.user.update({
-                where: { id: userId },
-                data: { credits: { increment: 5 } }
-            })
-            return;
-        }
-
-        const version = await prisma.version.create({
-            data: {
-                code: code.replace(/```[a-z]*\n?/gi, '').replace(/```$/g, '').trim(),
-                description: 'Initial version',
-                projectId
-            }
-        })
-
-        await prisma.conversation.create({
-            data: {
-                role: 'assistant',
-                content: "I've created your website! You can now preview it and request any changes.",
-                projectId
-            }
-        })
-
-        await prisma.websiteProject.update({
-            where: { id: projectId },
-            data: {
-                current_code: code.replace(/```[a-z]*\n?/gi, '').replace(/```$/g, '').trim(),
-                current_version_index: version.id
-            }
-        })
-
-    } catch (error: any) {
-        console.error('Generation error:', error);
-        await prisma.user.update({
-            where: { id: userId },
-            data: { credits: { increment: 5 } }
-        })
-        await prisma.conversation.create({
-            data: {
-                role: 'assistant',
-                content: "Sorry, something went wrong generating your website. Your credits have been refunded — please try again.",
-                projectId
-            }
-        })
-    }
-}
-
-//Controller Function to Get a Single User Project
-
-export const getUserProject = async (req: Request, res: Response) => {
-    try {
-        const userId = req.userId;
-        if (!userId) {
-            return res.status(401).json({ message: 'Unauthorized' });
-        }
-
-        const { projectId } = req.params;
-
-        const project = await prisma.websiteProject.findUnique({
-            where: { id: projectId, userId },
-            include: {
-                conversation: {
-                    orderBy: { timestamp: 'asc' }
-                },
-                versions: { orderBy: { timestamp: 'asc' } }
-            }
-        })
-
-        res.json({ project })
-
-    } catch (error: any) {
-        console.log(error.code || error.message);
-        res.status(500).json({ message: error.message });
-    }
-}
-
-// Controller Function to Get All Users Projects
-export const getUserProjects = async (req: Request, res: Response) => {
-    try {
-        const userId = req.userId;
-        if (!userId) {
-            return res.status(401).json({ message: 'Unauthorized' });
-        }
-
-        const projects = await prisma.websiteProject.findMany({
-            where: { userId },
-            orderBy: { updatedAt: 'desc' }
-        })
-
-        res.json({ projects })
-
-    } catch (error: any) {
-        console.log(error.code || error.message);
-        res.status(500).json({ message: error.message });
-    }
-}
-
-// Controller Function to Toggle Project Publish
-export const togglePublish = async (req: Request, res: Response) => {
-    try {
-        const userId = req.userId;
-        if (!userId) {
-            return res.status(401).json({ message: 'Unauthorized' });
-        }
-
-        const { projectId } = req.params;
-
-        const project = await prisma.websiteProject.findUnique({
-            where: { id: projectId, userId }
-        })
-
-        if (!project) {
-            return res.status(404).json({ message: 'Project not found' });
-        }
-
-        await prisma.websiteProject.update({
-            where: { id: projectId },
-            data: { isPublished: !project.isPublished }
-        })
-
-        res.json({ message: project.isPublished ? 'Project Unpublished' : 'Project Published Successfully' })
-
-    } catch (error: any) {
-        console.log(error.code || error.message);
-        res.status(500).json({ message: error.message });
-    }
-}
-
-// Controller Function to Purchase Credits
-export const purchaseCredits = async (req: Request, res: Response) => {
-
-}
-</file>
-
 <file path="server/lib/prisma.ts">
 import "dotenv/config";
 import { PrismaPg } from '@prisma/adapter-pg'
@@ -12635,32 +11852,6 @@ const adapter = new PrismaPg({ connectionString })
 const prisma = new PrismaClient({ adapter })
 
 export default prisma
-</file>
-
-<file path="server/middlewares/auth.ts">
-import { Request, Response, NextFunction } from 'express'
-import { auth } from '../lib/auth.js'
-import { fromNodeHeaders } from 'better-auth/node'
-
-
-export const protect = async (req: Request, res: Response, next: NextFunction) => {
-    try {
-        const session = await auth.api.getSession({
-            headers: fromNodeHeaders(req.headers)
-        })
-        if (!session || !session?.user) {
-            return res.status(401).json({ message: 'Unauthorized user' })
-        }
-        req.userId = session.user.id;
-        next();
-
-    } catch (error: any) {
-        console.log(error);
-        res.status(401).json({ message: error.code || error.message });
-
-    }
-
-}
 </file>
 
 <file path="server/prisma.config.ts">
@@ -13271,6 +12462,225 @@ const EditorPanel = ({ selectedElement, onUpdate, onClose }: EditorPanelProps) =
 export default EditorPanel
 </file>
 
+<file path="client/src/components/LoaderSteps.tsx">
+import { CircleIcon, ScanLineIcon, SquareIcon, TriangleIcon } from "lucide-react"
+import { useEffect, useState } from "react"
+
+const steps = [
+    { icon: ScanLineIcon, label: "Analyzing your request…" },
+    { icon: SquareIcon, label: "Generating layout structure…" },
+    { icon: TriangleIcon, label: "Assembling UI components…" },
+    { icon: CircleIcon, label: "Finalizing your website…" },
+]
+
+const STEP_DURATION = 45000
+const LoaderSteps = () => {
+
+    const [current, setCurrent] = useState(0)
+
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setCurrent((s) => (s + 1) % steps.length)
+
+        }, STEP_DURATION);
+        return () => clearInterval(interval)
+    }, [])
+
+    const Icon = steps[current].icon
+
+
+    return (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-gray-950 relative overflow-hidden text-white">
+            <div className="absolute inset-0 bg-linear-to-br from-blue-500/10 via-purple-500/10 to-fuchsia-500/10 blur-3xl animate-pulse"></div>
+
+            <div className="relative z-10 w-32 h-32 flex items-center justify-center">
+                <div className="absolute inset-0 rounded-full border border-indigo-400 animate-ping opacity-30" />
+                <div className="absolute inset-4 rounded-full border border-purple-400/20" />
+                <Icon className="w-8 h-8 text-white opacity-80 animate-bounce" />
+            </div>
+            {/* Step label – fade using transition only (no invisible start) */}
+            <p key={current} className="mt-8 text-lg font-light text-white/90 tracking-wide transition-all duration-700 ease-in-out opacity-100">{steps[current].label}</p>
+
+            <p className="text-xs text-gray-400 mt-2 transition-opacity duration-700 opacity-100">This may take around 2-3 minutes…</p>
+        </div>
+    )
+}
+
+export default LoaderSteps
+</file>
+
+<file path="client/src/components/Sidebar.tsx">
+import React, { useEffect, useRef, useState } from 'react'
+import type { Message, Project, Version } from '../types';
+import { BotIcon, EyeIcon, Loader2Icon, SendIcon, UserIcon } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import api from '@/configs/axios';
+import { toast } from 'sonner';
+
+interface SidebarProps {
+    isMenuOpen: boolean;
+    project: Project;
+    setProject: (project: Project) => void;
+    isGenerating: boolean;
+    setIsGenerating: (isGenerating: boolean) => void;
+
+}
+
+const Sidebar = ({ isMenuOpen, project, setProject, isGenerating, setIsGenerating }: SidebarProps) => {
+
+    const messageRef = useRef<HTMLDivElement>(null)
+
+    const [input, setInput] = useState('')
+
+    const fetchProject = async () => {
+        try {
+            const { data } = await api.get(`/api/user/project/${project.id}`)
+            setProject(data.project)
+        } catch (error: any) {
+            toast.error(error?.response?.data?.message || error.message);
+            console.log(error);
+        }
+    }
+
+    const handleRollback = async (versionId: string) => {
+        try {
+            const confirm = window.confirm('Are you sure you want to rollback to this version?')
+            if (!confirm) return;
+            setIsGenerating(true)
+            const { data } = await api.get(`/api/project/rollback/${project.id}/${versionId}`);
+            const { data: data2 } = await api.get(`/api/user/project/${project.id}`);
+            toast.success(data.message)
+            setProject(data2.project)
+            setIsGenerating(false)
+
+        } catch (error: any) {
+            setIsGenerating(false)
+            toast.error(error?.response?.data?.message || error.message);
+            console.log(error);
+        }
+    }
+
+    const handleRevisions = async (e: React.FormEvent) => {
+        e.preventDefault()
+        let interval: number | undefined;
+        try {
+            setIsGenerating(true);
+            interval = setInterval(() => {
+                fetchProject();
+            }, 10000)
+            const { data } = await api.post(`/api/project/revision/${project.id}`, { message: input });
+            fetchProject();
+            toast.success(data.message)
+            setInput('')
+            clearInterval(interval)
+            setIsGenerating(false)
+
+        } catch (error: any) {
+            setIsGenerating(false)
+            toast.error(error?.response?.data?.message || error.message);
+            console.log(error);
+            clearInterval(interval)
+
+        }
+
+    }
+
+    useEffect(() => {
+        if (messageRef.current) {
+            messageRef.current.scrollIntoView({ behavior: 'smooth' })
+        }
+    }, [project.conversation.length, isGenerating])
+
+
+    return (
+        <div className={`h-full  sm:max-w-sm rounded-xl bg-gray-900 border-gray-800 transition-all ${isMenuOpen ? 'max-sm:w-0 overflow-hidden' : 'w-full'}`}>
+            <div className='flex flex-col h-full'>
+                {/* Messages container */}
+                <div className='flex-1 overflow-y-auto no-scrollbar px-3 flex flex-col gap-4'>
+                    {[...project.conversation, ...project.versions]
+                        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()).map((message) => {
+                            const isMessage = 'content' in message;
+
+                            if (isMessage) {
+                                const msg = message as Message;
+                                const isUser = msg.role === 'user';
+                                return (
+                                    <div key={msg.id} className={`flex items-start gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
+                                        {!isUser && (
+                                            <div className='w-8 h-8 rounded-full bg-linear-to-br from-indigo-600 to-indigo-700 flex items-center justify-center'>
+                                                <BotIcon className='size-5 text-white' />
+                                            </div>
+                                        )}
+                                        <div className={`max-w-[80%] p-2 px-4 rounded-2xl shadow-sm text-sm mt-5 leading-relaxed ${isUser ? "bg-linear-to-r from-indigo-500 to-indigo-600 text-white rounded-tr-none" : "rounded-tl-none bg-gray-800 text-gray-100"}`}>
+                                            {msg.content}
+                                        </div>
+                                        {isUser && (
+                                            <div className='w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center'>
+                                                <UserIcon className='size-5 text-gray-200' />
+                                            </div>
+                                        )}
+                                    </div>
+                                )
+                            } else {
+                                const ver = message as Version;
+                                return (
+                                    <div key={ver.id} className='w-4/5 mx-auto my-2 p-3 rounded-xl bg-gray-800 text-gray-100 shadow flex flex-col gap-2'>
+                                        <div className='text-xs font-medium'>
+                                            code updated <br />
+                                            <span className='text-gray-500 text-xs font-normal'>
+                                                {new Date(ver.timestamp).toLocaleString()}
+                                            </span>
+                                        </div>
+                                        <div className='flex items-center justify-between'>
+                                            {project.current_version_index === ver.id ? (
+                                                <button className='px-3 py-1 rounded-md text-xs bg-gray-700'>Current version</button>
+                                            ) : (
+                                                <button onClick={() => handleRollback(ver.id)} className='px-3 py-1 rounded-md text-xs bg-indigo-500 hover:bg-indigo-600 text-white'>Roll back to this version</button>
+                                            )}
+                                            <Link target='_blank' to={`/preview/${project.id}/${ver.id}`}>
+                                                <EyeIcon className='size-6 p-1 bg-gray-700 hover:bg-indigo-500 transition-colors rounded' />
+                                            </Link>
+                                        </div>
+                                    </div>
+                                )
+                            }
+                        })}
+                    {isGenerating && (
+                        <div className='flex items-start gap-3 justify-start'>
+                            <div className='w-8 h-8 rounded-full bg-linear-to-br from-indigo-600 to-indigo-700 flex items-center justify-center'>
+                                <BotIcon className='size-5 text-white' />
+                            </div>
+                            {/* three dot loader */}
+                            <div className='flex gap-1.5 h-full items-end'>
+                                <span className='size-2 rounded-full animate-bounce bg-gray-600' style={{ animationDelay: '0s' }} />
+                                <span className='size-2 rounded-full animate-bounce bg-gray-600' style={{ animationDelay: '0.2s' }} />
+                                <span className='size-2 rounded-full animate-bounce bg-gray-600' style={{ animationDelay: '0.4s' }} />
+                            </div>
+                        </div>
+                    )
+
+                    }
+                    <div ref={messageRef} />
+                </div>
+                {/* Input area */}
+                <form onSubmit={handleRevisions} className='m-3 relative'>
+                    <div className='flex items-center gap-2'>
+                        <textarea onChange={(e) => setInput(e.target.value)} value={input} rows={4} placeholder='Describe your website or request changes...' className='flex-1 p-3 rounded-xl resize-none text-sm outline-none ring ring-gray-700 focus:ring-indigo-500 bg-gray-800 text-gray-100 placeholder-gray-400 transition-all' disabled={isGenerating} />
+                        <button disabled={isGenerating || !input.trim()} className='absolute bottom-2.5 right-2.5 rounded-full bg-linear-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white transition-colors disabled:opacity-60'>
+                            {isGenerating
+                                ? <Loader2Icon className='size-7 p-1.5 animate-spin text-white' />
+                                : <SendIcon className='size-7 p-1.5 text-white' />}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    )
+}
+
+export default Sidebar
+</file>
+
 <file path="client/src/main.tsx">
 import { createRoot } from 'react-dom/client'
 import './index.css'
@@ -13287,13 +12697,948 @@ createRoot(document.getElementById('root')!).render(
 )
 </file>
 
+<file path="client/src/pages/Pricing.tsx">
+import React from 'react'
+import { appPlans } from '../assets/assets';
+import Footer from '../components/Footer';
+import { authClient } from '@/lib/auth-client';
+import { toast } from 'sonner';
+import api from '@/configs/axios';
+
+interface Plan {
+    id: string;
+    name: string;
+    price: string;
+    credits: number;
+    description: string;
+    features: string[];
+}
+
+const Pricing = () => {
+
+
+    const { data: session } = authClient.useSession()
+    const [plans] = React.useState<Plan[]>(appPlans)
+
+    const handlePurchase = async (planId: string) => {
+        try {
+            if (!session?.user) return toast('Please login to purchase credits')
+            const { data } = await api.post('/api/user/purchase-credits', { planId })
+            window.location.href = data.payment_link;
+        } catch (error: any) {
+            toast.error(error?.response?.data?.message || error.message);
+            console.log(error);
+        }
+
+    }
+
+    return (
+        <>
+            <div className='w-full max-w-5xl mx-auto z-20 max-md:px-4 min-h-[80vh]'>
+                <div className='text-center mt-16'>
+                    <h2 className='text-gray-100 text-3xl font-medium'>Choose Your Plan</h2>
+                    <p className='text-gray-400 text-sm max-w-md mx-auto mt-2'>Start for free and scale up as you grow. Find the perfect plan for your content creation needs.</p>
+                </div>
+                <div className='pt-14 py-4 px-4 '>
+                    <div className='grid grid-cols-1 md:grid-cols-3 flex-wrap gap-4'>
+                        {plans.map((plan, idx) => (
+                            <div key={idx} className="p-6 bg-black/20 ring ring-indigo-950 mx-auto w-full max-w-sm rounded-lg text-white shadow-lg hover:ring-indigo-500 transition-all duration-400">
+                                <h3 className="text-xl font-bold">{plan.name}</h3>
+                                <div className="my-2">
+                                    <span className="text-4xl font-bold">{plan.price}</span>
+                                    <span className="text-gray-300"> / {plan.credits} credits</span>
+                                </div>
+
+                                <p className="text-gray-300 mb-6">{plan.description}</p>
+
+                                <ul className="space-y-1.5 mb-6 text-sm">
+                                    {plan.features.map((feature, i) => (
+                                        <li key={i} className="flex items-center">
+                                            <svg className="h-5 w-5 text-indigo-300 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+                                                stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                                            </svg>
+                                            <span className="text-gray-400">{feature}</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                                <button onClick={() => handlePurchase(plan.id)} className="w-full py-2 px-4 bg-indigo-500 hover:bg-indigo-600 active:scale-95 text-sm rounded-md transition-all">
+                                    Buy Now
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                <p className='mx-auto text-center text-sm max-w-md mt-10 text-white/60 font-light'>Project <span className='text-white'> Creation / Revision</span> consume <span className='text-white'>5 credits </span>. You can purchase more credits to create more projects.</p>
+            </div>
+            <Footer />
+        </>
+    )
+}
+
+export default Pricing
+</file>
+
+<file path="client/tsconfig.app.json">
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "es2023",
+    "lib": [
+      "ES2023",
+      "DOM"
+    ],
+    "module": "esnext",
+    "types": [
+      "vite/client"
+    ],
+    "allowArbitraryExtensions": true,
+    "skipLibCheck": true,
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    /* Linting */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    }
+  },
+  "include": [
+    "src"
+  ]
+}
+</file>
+
+<file path="client/tsconfig.json">
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./tsconfig.app.json"
+    },
+    {
+      "path": "./tsconfig.node.json"
+    }
+  ],
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    }
+  }
+}
+</file>
+
+<file path="server/controllers/projectController.ts">
+import { Request, Response } from 'express'
+import prisma from '../lib/prisma.js';
+import openai from '../configs/openai.js';
+
+// Controller Function to Make Revision
+export const makeRevision = async (req: Request, res: Response) => {
+    const userId = req.userId;
+
+    try {
+
+        const { projectId } = req.params;
+        const { message } = req.body;
+
+        const user = await prisma.user.findUnique({
+            where: { id: userId }
+        })
+
+        if (!userId || !user) {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
+
+        if (user.credits < 5) {
+            return res.status(403).json({ message: 'add more credits to make changes' });
+        }
+
+        if (!message || message.trim() === '') {
+            return res.status(400).json({ message: 'Please enter a valid prompt' });
+        }
+
+        const currentProject = await prisma.websiteProject.findUnique({
+            where: { id: projectId, userId },
+            include: { versions: true }
+        })
+
+        if (!currentProject) {
+            return res.status(404).json({ message: 'Project not found' });
+        }
+
+        await prisma.conversation.create({
+            data: {
+                role: 'user',
+                content: message,
+                projectId
+            }
+        })
+
+        await prisma.user.update({
+            where: { id: userId },
+            data: { credits: { decrement: 5 } }
+        })
+
+        // Enhance user prompt
+        const promptEnhanceResponse = await openai.chat.completions.create({
+            model: 'z-ai/glm-5.2:free',
+            messages: [
+                {
+                    role: 'system',
+                    content: `
+                    You are an expert web developer. 
+
+                    CRITICAL REQUIREMENTS:
+                    - Return ONLY the complete updated HTML code with the requested changes.
+                    - Use Tailwind CSS for ALL styling (NO custom CSS).
+                    - Use Tailwind utility classes for all styling changes.
+                    - Include all JavaScript in <script> tags before closing </body>
+                    - Make sure it's a complete, standalone HTML document with Tailwind CSS
+                    - Return the HTML Code Only, nothing else
+
+                    CRITICAL HARD RULES:
+                    1. You MUST put ALL output ONLY into message.content.
+                    2. You MUST NOT place anything in "reasoning", "analysis", "reasoning_details", or any hidden fields.
+                    3. You MUST NOT include internal thoughts, explanations, analysis, comments, or markdown.
+                    4. Do NOT include markdown, explanations, notes, or code fences.
+                    5. Do NOT reference ANY external JavaScript library (Chart.js, jQuery, GSAP, etc.) unless you include its exact <script> CDN tag in <head>. If unsure, do not use it at all.
+                    6. Do NOT reference images from any domain other than https://placehold.co — no other external image URLs are allowed, under any circumstances.
+                    7. All inline <script> code MUST be syntactically valid. Do not use any undefined variables or functions.
+                    8. Do NOT use tailwind.config = {...} as a <script> object — Tailwind v4's CDN build does not support it and will silently ignore it. Do NOT define custom colors, keyframes, or animations this way. Use only Tailwind's built-in default utility classes and animations (animate-pulse, animate-ping, animate-bounce, animate-spin), or write plain custom CSS with real @keyframes directly inside the <style> tag if a custom animation is needed. Never gate content visibility behind opacity:0 + scroll-triggered reveal classes unless the reveal script is guaranteed to run — prefer content visible by default.
+
+                    Apply the requested changes while maintaining the Tailwind CSS styling approach.`
+                },
+                {
+                    role: 'user',
+                    content: `User's request: "${message}"`
+                }
+            ]
+        })
+
+        const enhancedPrompt = promptEnhanceResponse.choices[0].message.content;
+
+        await prisma.conversation.create({
+            data: {
+                role: 'assistant',
+                content: `I've enhanced your prompt to: "${enhancedPrompt}"`,
+                projectId
+            }
+        })
+        await prisma.conversation.create({
+            data: {
+                role: 'assistant',
+                content: 'Now making changes to your website...',
+                projectId
+            }
+        })
+
+        // Generate website code
+        const codeGenerationResponse = await openai.chat.completions.create({
+            model: 'z-ai/glm-5.2:free',
+            messages: [
+                {
+                    role: 'system',
+                    content: `
+                    You are an expert web developer. 
+
+                    CRITICAL REQUIREMENTS:
+                    - Return ONLY the complete updated HTML code with the requested changes.
+                    - Use Tailwind CSS for ALL styling (NO custom CSS).
+                    - Use Tailwind utility classes for all styling changes.
+                    - Include all JavaScript in <script> tags before closing </body>
+                    - Make sure it's a complete, standalone HTML document with Tailwind CSS
+                    - Return the HTML Code Only, nothing else
+
+                    Apply the requested changes while maintaining the Tailwind CSS styling approach.`
+                },
+                {
+                    role: 'user',
+                    content: `
+                    Here is the current website code: "${currentProject.current_code}" The user wants this change: "${enhancedPrompt}"`
+                }
+            ]
+        })
+
+        const code = codeGenerationResponse.choices[0].message.content || '';
+
+        if (!code) {
+            await prisma.conversation.create({
+                data: {
+                    role: 'assistant',
+                    content: "Unable to generate the code, please try again",
+                    projectId
+                }
+            })
+            await prisma.user.update({
+                where: { id: userId },
+                data: { credits: { increment: 5 } }
+            })
+            return;
+        }
+
+        const version = await prisma.version.create({
+            data: {
+                code: code.replace(/```[a-z]*\n?/gi, '')
+                    .replace(/```$/g, '')
+                    .trim(),
+                description: 'changes made',
+                projectId
+            }
+        })
+
+        await prisma.conversation.create({
+            data: {
+                role: 'assistant',
+                content: "I've made the changes to your website! You can now preview it",
+                projectId
+            }
+        })
+
+        await prisma.websiteProject.update({
+            where: { id: projectId },
+            data: {
+                current_code: code.replace(/```[a-z]*\n?/gi, '')
+                    .replace(/```$/g, '')
+                    .trim(),
+                current_version_index: version.id
+            }
+        })
+
+
+        res.json({ message: 'Changes made successfully' })
+    } catch (error: any) {
+        await prisma.user.update({
+            where: { id: userId },
+            data: { credits: { increment: 5 } }
+        })
+        console.log(error.code || error.message);
+        res.status(500).json({ message: error.message });
+    }
+}
+
+// Controller Function to rollback to a specific version
+export const rollbackToVersion = async (req: Request, res: Response) => {
+    try {
+        const userId = req.userId;
+        if (!userId) {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
+        const { projectId, versionId } = req.params;
+
+        const project = await prisma.websiteProject.findUnique({
+            where: { id: projectId, userId },
+            include: { versions: true }
+        })
+
+        if (!project) {
+            return res.status(404).json({ message: 'Project not found' });
+        }
+
+        const version = project.versions.find((version) => version.id === versionId);
+
+        if (!version) {
+            return res.status(404).json({ message: 'Version not found' });
+        }
+
+        await prisma.websiteProject.update({
+            where: { id: projectId, userId },
+            data: {
+                current_code: version.code,
+                current_version_index: version.id
+            }
+        })
+
+        await prisma.conversation.create({
+            data: {
+                role: 'assistant',
+                content: "I've rolled back your website to selected version. You can now preview it",
+                projectId
+            }
+        })
+
+        res.json({ message: 'Version rolled back' });
+    } catch (error: any) {
+        console.log(error.code || error.message);
+        res.status(500).json({ message: error.message });
+    }
+}
+
+// Controller Function to Delete a Project
+export const deleteProject = async (req: Request, res: Response) => {
+    try {
+        const userId = req.userId;
+        const { projectId } = req.params;
+
+        await prisma.websiteProject.delete({
+            where: { id: projectId, userId },
+        })
+
+        res.json({ message: 'Project deleted successfully' });
+    } catch (error: any) {
+        console.log(error.code || error.message);
+        res.status(500).json({ message: error.message });
+    }
+}
+
+// Controller for getting project code for preview
+export const getProjectPreview = async (req: Request, res: Response) => {
+    try {
+        const userId = req.userId;
+        const { projectId } = req.params;
+
+        if (!userId) {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
+
+        const project = await prisma.websiteProject.findFirst({
+            where: { id: projectId, userId },
+            include: { versions: true }
+        })
+
+        if (!project) {
+            return res.status(404).json({ message: 'Project not found' });
+        }
+
+        res.json({ project });
+    } catch (error: any) {
+        console.log(error.code || error.message);
+        res.status(500).json({ message: error.message });
+    }
+}
+
+// Get published projects
+export const getPublishedProjects = async (req: Request, res: Response) => {
+    try {
+
+        const projects = await prisma.websiteProject.findMany({
+            where: { isPublished: true },
+            include: { user: true }
+        })
+
+        res.json({ projects });
+    } catch (error: any) {
+        console.log(error.code || error.message);
+        res.status(500).json({ message: error.message });
+    }
+}
+
+// Get a single project by id
+export const getProjectById = async (req: Request, res: Response) => {
+    try {
+        const { projectId } = req.params;
+
+        const project = await prisma.websiteProject.findFirst({
+            where: { id: projectId },
+        })
+
+        if (!project || project.isPublished === false || !project?.current_code) {
+            return res.status(404).json({ message: 'Project not found' });
+        }
+
+        res.json({ code: project.current_code });
+    } catch (error: any) {
+        console.log(error.code || error.message);
+        res.status(500).json({ message: error.message });
+    }
+}
+
+// Controller to save project code
+export const saveProjectCode = async (req: Request, res: Response) => {
+    try {
+        const userId = req.userId;
+        const { projectId } = req.params;
+        const { code } = req.body;
+
+        if (!userId) {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
+
+        if (!code) {
+            return res.status(400).json({ message: 'Code is required' });
+        }
+
+        const project = await prisma.websiteProject.findUnique({
+            where: { id: projectId, userId }
+        })
+
+        if (!project) {
+            return res.status(404).json({ message: 'Project not found' });
+        }
+
+        await prisma.websiteProject.update({
+            where: { id: projectId },
+            data: { current_code: code, current_version_index: '' }
+        })
+
+        res.json({ message: 'Project saved successfully' });
+    } catch (error: any) {
+        console.log(error.code || error.message);
+        res.status(500).json({ message: error.message });
+    }
+}
+</file>
+
+<file path="server/controllers/userController.ts">
+import { Request, Response } from 'express'
+import prisma from '../lib/prisma.js';
+import openai from '../configs/openai.js';
+import Stripe from 'stripe'
+
+
+// Get User Credits
+export const getUserCredits = async (req: Request, res: Response) => {
+    try {
+        const userId = req.userId;
+        if (!userId) {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
+
+        const user = await prisma.user.findUnique({
+            where: { id: userId }
+        })
+
+        res.json({ credits: user?.credits })
+    } catch (error: any) {
+        console.log(error.code || error.message);
+        res.status(500).json({ message: error.message });
+    }
+}
+
+// Controller Function to create New Project
+export const createUserProject = async (req: Request, res: Response) => {
+    const userId = req.userId;
+    try {
+        const { initial_prompt } = req.body;
+
+        if (!userId) {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
+
+        const user = await prisma.user.findUnique({
+            where: { id: userId }
+        })
+
+        if (user && user.credits < 5) {
+            return res.status(403).json({ message: 'add credits to create more projects' });
+        }
+
+        const project = await prisma.websiteProject.create({
+            data: {
+                name: initial_prompt.length > 50 ? initial_prompt.substring(0, 47) + '...' : initial_prompt,
+                initial_prompt,
+                userId
+            }
+        })
+
+        await prisma.user.update({
+            where: { id: userId },
+            data: { totalCreation: { increment: 1 } }
+        })
+
+        await prisma.conversation.create({
+            data: {
+                role: 'user',
+                content: initial_prompt,
+                projectId: project.id
+            }
+        })
+
+        await prisma.user.update({
+            where: { id: userId },
+            data: { credits: { decrement: 5 } }
+        })
+
+        res.json({ projectId: project.id })
+
+        generateWebsite(project.id, userId, initial_prompt).catch((err) => {
+            console.error('Background generation failed:', err);
+        });
+
+    } catch (error: any) {
+        console.log(error);
+        if (!res.headersSent) {
+            res.status(500).json({ message: error.message });
+        }
+    }
+}
+
+async function generateWebsite(projectId: string, userId: string, initial_prompt: string) {
+    try {
+        const promptEnhanceResponse = await openai.chat.completions.create({
+            model: 'z-ai/glm-5.2:free',
+            messages: [
+                {
+                    role: 'system',
+                    content: `
+                    You are a prompt enhancement specialist. Take the user's website request and expand it into a detailed, comprehensive prompt that will help create the best possible website.
+
+                    Enhance this prompt by:
+                    1. Adding specific design details (layout, color scheme, typography)
+                    2. Specifying key sections and features
+                    3. Describing the user experience and interactions
+                    4. Including modern web design best practices
+                    5. Mentioning responsive design requirements
+                    6. Adding any missing but important elements
+
+                    Return ONLY the enhanced prompt, nothing else. Make it detailed but concise (2-3 paragraphs max).`
+                },
+                {
+                    role: 'user',
+                    content: initial_prompt
+                }
+            ]
+        })
+
+        const enhancedPrompt = promptEnhanceResponse.choices[0].message.content;
+
+        await prisma.conversation.create({
+            data: {
+                role: 'assistant',
+                content: `I've enhanced your prompt to: "${enhancedPrompt}"`,
+                projectId
+            }
+        })
+
+        await prisma.conversation.create({
+            data: {
+                role: 'assistant',
+                content: 'now generating your website...',
+                projectId
+            }
+        })
+
+        const codeGenerationResponse = await openai.chat.completions.create({
+            model: 'z-ai/glm-5.2:free',
+            messages: [
+                {
+                    role: 'system',
+                    content: `
+                     You are an expert web developer. Create a complete, production-ready, single-page website based on this request: "${enhancedPrompt}"
+
+                    CRITICAL REQUIREMENTS:
+                    - You MUST output valid HTML ONLY. 
+                    - Use Tailwind CSS for ALL styling
+                    - Include this EXACT script in the <head>: <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+                    - Use Tailwind utility classes extensively for styling, animations, and responsiveness
+                    - Make it fully functional and interactive with JavaScript in <script> tag before closing </body>
+                    - Use modern, beautiful design with great UX using Tailwind classes
+                    - Make it responsive using Tailwind responsive classes (sm:, md:, lg:, xl:)
+                    - Use Tailwind animations and transitions (animate-*, transition-*)
+                    - Include all necessary meta tags
+                    - Use Google Fonts CDN if needed for custom fonts
+                    - Use placeholder images from https://placehold.co/600x400
+                    - Use Tailwind gradient classes for beautiful backgrounds
+                    - Make sure all buttons, cards, and components use Tailwind styling
+
+                    CRITICAL HARD RULES:
+                    1. You MUST put ALL output ONLY into message.content.
+                    2. You MUST NOT place anything in "reasoning", "analysis", "reasoning_details", or any hidden fields.
+                    3. You MUST NOT include internal thoughts, explanations, analysis, comments, or markdown.
+                    4. Do NOT include markdown, explanations, notes, or code fences.
+                    5. Do NOT reference ANY external JavaScript library (Chart.js, jQuery, GSAP, etc.) unless you include its exact <script> CDN tag in <head>. If unsure, do not use it at all.
+                    6. Do NOT reference images from any domain other than https://placehold.co — no other external image URLs are allowed, under any circumstances.
+                    7. All inline <script> code MUST be syntactically valid. Do not use any undefined variables or functions.
+
+                    The HTML should be complete and ready to render as-is with Tailwind CSS.
+                    8. Do NOT use tailwind.config = {...} as a <script> object — Tailwind v4's CDN build does not support it and will silently ignore it. Do NOT define custom colors, keyframes, or animations this way. Use only Tailwind's built-in default utility classes and animations (animate-pulse, animate-ping, animate-bounce, animate-spin), or write plain custom CSS with real @keyframes directly inside the <style> tag if a custom animation is needed. Never gate initial content visibility behind opacity:0 + scroll-triggered reveal classes unless the reveal script is guaranteed to run — prefer content visible by default.`
+                },
+                {
+                    role: 'user',
+                    content: enhancedPrompt || ''
+                }
+            ]
+        })
+
+        const code = codeGenerationResponse.choices[0].message.content || '';
+
+        if (!code) {
+            await prisma.conversation.create({
+                data: {
+                    role: 'assistant',
+                    content: "Unable to generate the code, please try again",
+                    projectId
+                }
+            })
+            await prisma.user.update({
+                where: { id: userId },
+                data: { credits: { increment: 5 } }
+            })
+            return;
+        }
+
+        const version = await prisma.version.create({
+            data: {
+                code: code.replace(/```[a-z]*\n?/gi, '').replace(/```$/g, '').trim(),
+                description: 'Initial version',
+                projectId
+            }
+        })
+
+        await prisma.conversation.create({
+            data: {
+                role: 'assistant',
+                content: "I've created your website! You can now preview it and request any changes.",
+                projectId
+            }
+        })
+
+        await prisma.websiteProject.update({
+            where: { id: projectId },
+            data: {
+                current_code: code.replace(/```[a-z]*\n?/gi, '').replace(/```$/g, '').trim(),
+                current_version_index: version.id
+            }
+        })
+
+    } catch (error: any) {
+        console.error('Generation error:', error);
+        await prisma.user.update({
+            where: { id: userId },
+            data: { credits: { increment: 5 } }
+        })
+        await prisma.conversation.create({
+            data: {
+                role: 'assistant',
+                content: "Sorry, something went wrong generating your website. Your credits have been refunded — please try again.",
+                projectId
+            }
+        })
+    }
+}
+
+//Controller Function to Get a Single User Project
+
+export const getUserProject = async (req: Request, res: Response) => {
+    try {
+        const userId = req.userId;
+        if (!userId) {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
+
+        const { projectId } = req.params;
+
+        const project = await prisma.websiteProject.findUnique({
+            where: { id: projectId, userId },
+            include: {
+                conversation: {
+                    orderBy: { timestamp: 'asc' }
+                },
+                versions: { orderBy: { timestamp: 'asc' } }
+            }
+        })
+
+        res.json({ project })
+
+    } catch (error: any) {
+        console.log(error.code || error.message);
+        res.status(500).json({ message: error.message });
+    }
+}
+
+// Controller Function to Get All Users Projects
+export const getUserProjects = async (req: Request, res: Response) => {
+    try {
+        const userId = req.userId;
+        if (!userId) {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
+
+        const projects = await prisma.websiteProject.findMany({
+            where: { userId },
+            orderBy: { updatedAt: 'desc' }
+        })
+
+        res.json({ projects })
+
+    } catch (error: any) {
+        console.log(error.code || error.message);
+        res.status(500).json({ message: error.message });
+    }
+}
+
+// Controller Function to Toggle Project Publish
+export const togglePublish = async (req: Request, res: Response) => {
+    try {
+        const userId = req.userId;
+        if (!userId) {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
+
+        const { projectId } = req.params;
+
+        const project = await prisma.websiteProject.findUnique({
+            where: { id: projectId, userId }
+        })
+
+        if (!project) {
+            return res.status(404).json({ message: 'Project not found' });
+        }
+
+        await prisma.websiteProject.update({
+            where: { id: projectId },
+            data: { isPublished: !project.isPublished }
+        })
+
+        res.json({ message: project.isPublished ? 'Project Unpublished' : 'Project Published Successfully' })
+
+    } catch (error: any) {
+        console.log(error.code || error.message);
+        res.status(500).json({ message: error.message });
+    }
+}
+
+// Controller Function to Purchase Credits
+export const purchaseCredits = async (req: Request, res: Response) => {
+    try {
+        interface Plan {
+            credits: number;
+            amount: number;
+        }
+
+        const plans = {
+            basic: { credits: 100, amount: 5 },
+            pro: { credits: 400, amount: 19 },
+            enterprise: { credits: 1000, amount: 49 },
+        }
+
+        const userId = req.userId;
+        const { planId } = req.body as { planId: keyof typeof plans }
+        const origin = req.headers.origin as string;
+
+        const plan: Plan = plans[planId]
+
+        if (!plan) {
+            return res.status(404).json({ message: 'Plan not found' });
+        }
+
+        const transaction = await prisma.transaction.create({
+            data: {
+                userId: userId!,
+                planId: req.body.planId,
+                amount: plan.amount,
+                credits: plan.credits
+            }
+        })
+
+        const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
+
+        const session = await stripe.checkout.sessions.create({
+            success_url: `${origin}/loading`,
+            cancel_url: `${origin}`,
+            line_items: [
+                {
+                    price_data: {
+                        currency: 'usd',
+                        product_data: {
+                            name: `ForgeSite - ${plan.credits} credits`
+                        },
+                        unit_amount: Math.floor(transaction.amount) * 100
+                    },
+                    quantity: 1
+                },
+            ],
+            mode: 'payment',
+            metadata: {
+                transactionId: transaction.id,
+                appId: 'ForgeSite'
+            },
+            expires_at: Math.floor(Date.now() / 1000) + 30 * 60, // Expires in 30 minutes
+        });
+
+        res.json({ payment_link: session.url })
+
+    } catch (error: any) {
+        console.log(error.code || error.message);
+        res.status(500).json({ message: error.message });
+    }
+}
+</file>
+
+<file path="server/lib/auth.ts">
+import 'dotenv/config';
+import { betterAuth } from "better-auth";
+import { prismaAdapter } from "better-auth/adapters/prisma";
+import prisma from "./prisma.js";
+
+const trustedOrigins = process.env.TRUSTED_ORIGINS?.split(',') || [];
+
+export const auth = betterAuth({
+    database: prismaAdapter(prisma, {
+        provider: "postgresql",
+    }),
+    emailAndPassword: {
+        enabled: true,
+    },
+    user: {
+        deleteUser: { enabled: true }
+    },
+    trustedOrigins,
+    baseURL: process.env.BETTER_AUTH_URL!,
+    secret: process.env.BETTER_AUTH_SECRET!,
+    advanced: {
+        cookies: {
+            session_token: {
+                name: 'auth_session',
+                attributes: {
+                    httpOnly: true,
+                    secure: process.env.NODE_ENV === 'production',
+                    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+                    path: '/',
+                }
+            }
+        }
+    }
+});
+</file>
+
+<file path="server/middlewares/auth.ts">
+import { Request, Response, NextFunction } from 'express'
+import { auth } from '../lib/auth.js'
+import { fromNodeHeaders } from 'better-auth/node'
+
+
+export const protect = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const session = await auth.api.getSession({
+            headers: fromNodeHeaders(req.headers)
+        })
+        if (!session || !session?.user) {
+            return res.status(401).json({ message: 'Unauthorized user' })
+        }
+        req.userId = session.user.id;
+        next();
+
+    } catch (error: any) {
+        console.log(error);
+        res.status(401).json({ message: error.code || error.message });
+
+    }
+
+}
+</file>
+
 <file path="client/src/pages/Community.tsx">
 import React, { useEffect, useState } from 'react'
 import type { Project } from '../types';
 import { Loader2Icon, PlusIcon, TrashIcon } from 'lucide-react';
-import { useNavigate, Link } from 'react-router-dom';
-import { dummyProjects } from '../assets/assets';
+import { Link, useNavigate } from 'react-router-dom';
 import Footer from '../components/Footer';
+import api from '@/configs/axios';
+import { toast } from 'sonner';
 
 
 const Community = () => {
@@ -13302,11 +13647,14 @@ const Community = () => {
     const navigate = useNavigate()
 
     const fetchProjects = async () => {
-        setProjects(dummyProjects)
-        //Simulate Loading
-        setTimeout(() => {
-            setLoading(false)
-        }, 1000);
+        try {
+            const { data } = await api.get('/api/project/published');
+            setProjects(data.projects);
+            setLoading(false);
+        } catch (error: any) {
+            console.log(error);
+            toast.error(error?.response?.data?.message || error.message);
+        }
     }
 
     useEffect(() => {
@@ -13478,29 +13826,49 @@ import React, { useEffect, useState } from 'react'
 import type { Project } from '../types';
 import { Loader2Icon, PlusIcon, TrashIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { dummyProjects } from '../assets/assets';
 import Footer from '../components/Footer';
+import api from '@/configs/axios';
+import { toast } from 'sonner';
+import { authClient } from '@/lib/auth-client';
 
 const MyProjects = () => {
+    const { data: session, isPending } = authClient.useSession()
     const [loading, setLoading] = useState(true);
     const [projects, setProjects] = useState<Project[]>([])
     const navigate = useNavigate()
 
     const fetchProjects = async () => {
-        setProjects(dummyProjects)
-        //Simulate Loading
-        setTimeout(() => {
+        try {
+            const { data } = await api.get('/api/user/projects')
+            setProjects(data.projects)
             setLoading(false)
-        }, 1000);
+        } catch (error: any) {
+            console.log(error);
+            toast.error(error?.response?.data?.message || error.message)
+        }
     }
 
     const deleteProject = async (projectId: string) => {
-
+        try {
+            const confirm = window.confirm('Are you sure you want to delete this project?');
+            if (!confirm) return;
+            const { data } = await api.delete(`/api/project/${projectId}`)
+            toast.success(data.message);
+            fetchProjects()
+        } catch (error: any) {
+            console.log(error);
+            toast.error(error?.response?.data?.message || error.message)
+        }
     }
 
     useEffect(() => {
-        fetchProjects()
-    }, [])
+        if (session?.user && !isPending) {
+            fetchProjects()
+        } else if (!isPending && !session?.user) {
+            navigate('/');
+            toast('Please login to view your projects');
+        }
+    }, [session?.user])
     return (
         <>
             <div className='px-4 md:px-16 lg:px-24 xl:px-32'>
@@ -13582,30 +13950,43 @@ export default MyProjects
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Loader2Icon } from "lucide-react";
-import { dummyProjects } from "../assets/assets";
 import ProjectPreview from "../components/ProjectPreview";
-import type { Project } from "../types";
+import type { Project, Version } from "../types";
+import api from "@/configs/axios";
+import { toast } from "sonner";
+import { authClient } from "@/lib/auth-client";
 
 
 const Preview = () => {
 
+    const { data: session, isPending } = authClient.useSession()
     const { projectId, versionId } = useParams()
     const [code, setCode] = useState('');
-    const [loading, setLoading] = useState(true)
+    const [loading, setLoading] = useState(true);
 
     const fetchCode = async () => {
-        setTimeout(() => {
-            const code = dummyProjects.find(project => project.id === projectId)?.current_code;
-            if (code) {
-                setCode(code);
-                setLoading(false);
+        try {
+            const { data } = await api.get(`/api/project/preview/${projectId}`)
+            setCode(data.project.current_code)
+            if (versionId) {
+                data.project.versions.forEach((version: Version) => {
+                    if (version.id === versionId) {
+                        setCode(version.code)
+                    }
+                })
             }
-        }, 2000);
+            setLoading(false)
+        } catch (error: any) {
+            toast.error(error?.response?.data?.message || error.message);
+            console.log(error);
+        }
     }
 
     useEffect(() => {
-        fetchCode()
-    }, [])
+        if (!isPending && session?.user) {
+            fetchCode()
+        }
+    }, [session?.user])
 
     if (loading) {
         return (
@@ -13614,7 +13995,6 @@ const Preview = () => {
             </div>
         )
     }
-
     return (
         <div className="h-screen">
             {code && <ProjectPreview project={{ current_code: code } as Project} isGenerating={false} showEditorPanel={false} />}
@@ -13625,98 +14005,29 @@ const Preview = () => {
 export default Preview
 </file>
 
-<file path="client/src/pages/Pricing.tsx">
-import React from 'react'
-import { appPlans } from '../assets/assets';
-import Footer from '../components/Footer';
-
-interface Plan {
-    id: string;
-    name: string;
-    price: string;
-    credits: number;
-    description: string;
-    features: string[];
-}
-
-const Pricing = () => {
-
-    const [plans] = React.useState<Plan[]>(appPlans)
-
-    const handlePurchase = async (planId: string) => {
-
-    }
-
-    return (
-        <>
-            <div className='w-full max-w-5xl mx-auto z-20 max-md:px-4 min-h-[80vh]'>
-                <div className='text-center mt-16'>
-                    <h2 className='text-gray-100 text-3xl font-medium'>Choose Your Plan</h2>
-                    <p className='text-gray-400 text-sm max-w-md mx-auto mt-2'>Start for free and scale up as you grow. Find the perfect plan for your content creation needs.</p>
-                </div>
-                <div className='pt-14 py-4 px-4 '>
-                    <div className='grid grid-cols-1 md:grid-cols-3 flex-wrap gap-4'>
-                        {plans.map((plan, idx) => (
-                            <div key={idx} className="p-6 bg-black/20 ring ring-indigo-950 mx-auto w-full max-w-sm rounded-lg text-white shadow-lg hover:ring-indigo-500 transition-all duration-400">
-                                <h3 className="text-xl font-bold">{plan.name}</h3>
-                                <div className="my-2">
-                                    <span className="text-4xl font-bold">{plan.price}</span>
-                                    <span className="text-gray-300"> / {plan.credits} credits</span>
-                                </div>
-
-                                <p className="text-gray-300 mb-6">{plan.description}</p>
-
-                                <ul className="space-y-1.5 mb-6 text-sm">
-                                    {plan.features.map((feature, i) => (
-                                        <li key={i} className="flex items-center">
-                                            <svg className="h-5 w-5 text-indigo-300 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
-                                                stroke="currentColor">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
-                                            </svg>
-                                            <span className="text-gray-400">{feature}</span>
-                                        </li>
-                                    ))}
-                                </ul>
-                                <button onClick={() => handlePurchase(plan.id)} className="w-full py-2 px-4 bg-indigo-500 hover:bg-indigo-600 active:scale-95 text-sm rounded-md transition-all">
-                                    Buy Now
-                                </button>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-                <p className='mx-auto text-center text-sm max-w-md mt-10 text-white/60 font-light'>Project <span className='text-white'> Creation / Revision</span> consume <span className='text-white'>5 credits </span>. You can purchase more credits to create more projects.</p>
-            </div>
-            <Footer />
-        </>
-    )
-}
-
-export default Pricing
-</file>
-
 <file path="client/src/pages/View.tsx">
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom"
-import { dummyProjects } from "../assets/assets";
 import { Loader2Icon } from "lucide-react";
 import ProjectPreview from "../components/ProjectPreview";
 import type { Project } from "../types";
-
+import api from "@/configs/axios";
+import { toast } from "sonner";
 
 const View = () => {
-
     const { projectId } = useParams();
-    const [code, setCode] = useState('');
+    const [code, setCode] = useState('')
     const [loading, setLoading] = useState(true)
 
     const fetchCode = async () => {
-        const code = dummyProjects.find(project => project.id === projectId)?.current_code;
-        setTimeout(() => {
-            if (code) {
-                setCode(code);
-                setLoading(false);
-            }
-        }, 2000);
+        try {
+            const { data } = await api.get(`/api/project/published/${projectId}`);
+            setCode(data.code)
+            setLoading(false)
+        } catch (error: any) {
+            toast.error(error?.response?.data?.message || error.message);
+            console.log(error);
+        }
     }
 
     useEffect(() => {
@@ -13741,103 +14052,44 @@ const View = () => {
 export default View
 </file>
 
-<file path="client/tsconfig.app.json">
+<file path="server/package.json">
 {
-  "compilerOptions": {
-    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
-    "target": "es2023",
-    "lib": [
-      "ES2023",
-      "DOM"
-    ],
-    "module": "esnext",
-    "types": [
-      "vite/client"
-    ],
-    "allowArbitraryExtensions": true,
-    "skipLibCheck": true,
-    /* Bundler mode */
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "moduleDetection": "force",
-    "noEmit": true,
-    "jsx": "react-jsx",
-    /* Linting */
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true,
-    "baseUrl": ".",
-    "paths": {
-      "@/*": [
-        "./src/*"
-      ]
-    }
+  "name": "server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "tsx server.ts",
+    "server": "nodemon --exec tsx server.ts",
+    "build": "tsc"
   },
-  "include": [
-    "src"
-  ]
-}
-</file>
-
-<file path="client/tsconfig.json">
-{
-  "files": [],
-  "references": [
-    {
-      "path": "./tsconfig.app.json"
-    },
-    {
-      "path": "./tsconfig.node.json"
-    }
-  ],
-  "compilerOptions": {
-    "baseUrl": ".",
-    "paths": {
-      "@/*": [
-        "./src/*"
-      ]
-    }
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.9.1",
+    "@prisma/client": "^7.9.1",
+    "better-auth": "^1.6.29",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "openai": "^7.4.0",
+    "pg": "^8.23.0",
+    "stripe": "^22.5.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.2.0",
+    "@types/pg": "^8.21.0",
+    "nodemon": "^3.1.14",
+    "prisma": "^7.9.1",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
   }
 }
-</file>
-
-<file path="server/lib/auth.ts">
-import 'dotenv/config';
-import { betterAuth } from "better-auth";
-import { prismaAdapter } from "better-auth/adapters/prisma";
-import prisma from "./prisma.js";
-
-const trustedOrigins = process.env.TRUSTED_ORIGINS?.split(',') || [];
-
-export const auth = betterAuth({
-    database: prismaAdapter(prisma, {
-        provider: "postgresql",
-    }),
-    emailAndPassword: {
-        enabled: true,
-    },
-    user: {
-        deleteUser: { enabled: true }
-    },
-    trustedOrigins,
-    baseURL: process.env.BETTER_AUTH_URL!,
-    secret: process.env.BETTER_AUTH_SECRET!,
-    advanced: {
-        cookies: {
-            session_token: {
-                name: 'auth_session',
-                attributes: {
-                    httpOnly: true,
-                    secure: process.env.NODE_ENV === 'production',
-                    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-                    path: '/',
-                }
-            }
-        }
-    }
-});
 </file>
 
 <file path="client/package.json">
@@ -13884,332 +14136,6 @@ export const auth = betterAuth({
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.65.0",
     "vite": "^8.2.0"
-  }
-}
-</file>
-
-<file path="client/src/components/ProjectPreview.tsx">
-import React, { forwardRef, useRef, useState, useEffect, useImperativeHandle } from 'react'
-import type { Project } from '../types';
-import { iframeScript } from '../assets/assets';
-import EditorPanel from './EditorPanel';
-import LoaderSteps from './LoaderSteps';
-
-interface ProjectPreviewProps {
-    project: Project;
-    isGenerating: boolean;
-    device?: 'phone' | 'tablet' | 'desktop';
-    showEditorPanel?: boolean;
-
-}
-
-export interface ProjectPreviewRef {
-    getCode: () => string | undefined;
-}
-
-
-const ProjectPreview = forwardRef<ProjectPreviewRef, ProjectPreviewProps>(({ project, isGenerating, device = 'desktop', showEditorPanel = true }, ref) => {
-
-    const iframeRef = useRef<HTMLIFrameElement>(null)
-
-    const [selectedElement, setSelectedElement] = useState<any>(null)
-
-    const resolutions = {
-        phone: 'w-[412px]',
-        tablet: 'w-[768px]',
-        desktop: 'w-full'
-
-    }
-
-    useImperativeHandle(ref, () => ({
-        getCode: () => {
-            const doc = iframeRef.current?.contentDocument;
-            if (!doc) return undefined;
-
-            // 1. Remove our selection class / attributes / outline from all elements
-            doc.querySelectorAll('.ai-selected-element,[data-ai-selected').forEach((el) => {
-                el.classList.remove('ai-selected-element');
-                el.removeAttribute('data-ai-selected');
-                (el as HTMLElement).style.outline = '';
-            })
-
-            // 2. Remove inject style + script from the document
-            const previewStyle = doc.getElementById('ai-preview-style');
-            if (previewStyle) previewStyle.remove();
-
-            const previewScript = doc.getElementById('ai-preview-script');
-            if (previewScript) previewScript.remove()
-
-            // 3. Serialize clean HTML
-            const html = doc.documentElement.outerHTML;
-            return html;
-
-        }
-    }))
-
-    useEffect(() => {
-        const handleMesaage = (event: MessageEvent) => {
-            if (event.data.type === 'ELEMENT_SELECTED') {
-                setSelectedElement(event.data.payload);
-            } else if (event.data.type === 'CLEAR_SELECTION') {
-                setSelectedElement(null)
-            }
-        }
-        window.addEventListener('message', handleMesaage)
-        return () => window.removeEventListener('message', handleMesaage)
-    }, [])
-
-    const handleUpdate = (updates: any) => {
-        if (iframeRef.current?.contentWindow) {
-            iframeRef.current.contentWindow.postMessage({
-                type: 'UPDATE_ELEMENT',
-                payload: updates
-            }, '*')
-        }
-    }
-
-
-    const injectPreview = (html: string) => {
-        if (!html) return '';
-        if (!showEditorPanel) return html;
-
-        if (!html.includes('</body>')) {
-            return html.replace('</body>', iframeScript + '</body>')
-        } else {
-            return html + iframeScript;
-        }
-    }
-
-    return (
-        <div className='relative h-full bg-gray-900 flex-1 rounded-xl overflow-hidden max-sm:ml-2'>
-            {project.current_code
-                ?
-                (
-                    <>
-                        <iframe
-                            ref={iframeRef}
-                            srcDoc={injectPreview(project.current_code)}
-                            className={`h-full max-sm:w-full ${resolutions[device]} mx-auto transition-all`} />
-                        {showEditorPanel && selectedElement && (
-                            <EditorPanel selectedElement={selectedElement}
-                                onUpdate={handleUpdate} onClose={() => {
-                                    setSelectedElement(null);
-                                    if (iframeRef.current?.contentWindow) {
-                                        iframeRef.current.contentWindow.postMessage({ type: 'CLEAR_SELECTION_REQUEST' }, '*')
-                                    }
-                                }} />
-                        )}
-                    </>
-                )
-                :
-                isGenerating && (
-                    <LoaderSteps />
-                )
-            }
-
-        </div>
-    )
-})
-
-export default ProjectPreview
-</file>
-
-<file path="client/src/pages/Projects.tsx">
-import React, { useEffect, useState, useRef } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
-import type { Project } from '../types'
-import { ArrowBigDownDashIcon, EyeIcon, EyeOffIcon, FullscreenIcon, LaptopIcon, Loader2Icon, MessageSquareIcon, SaveIcon, SmartphoneIcon, TabletIcon, XIcon } from 'lucide-react'
-import Sidebar from '../components/Sidebar'
-import ProjectPreview, { type ProjectPreviewRef } from '../components/ProjectPreview'
-import api from '@/configs/axios'
-import { toast } from 'sonner'
-import { authClient } from '@/lib/auth-client'
-
-const Projects = () => {
-    const { projectId } = useParams()
-    const navigate = useNavigate()
-    const { data: session, isPending } = authClient.useSession()
-
-    const [project, setProject] = useState<Project | null>(null)
-    const [loading, setLoading] = useState(true)
-
-    const [isGenerating, setIsGenerating] = useState(true)
-    const [device, setDevice] = useState<'phone' | 'tablet' | 'desktop'>("desktop")
-
-    const [isMenuOpen, setIsMenuOpen] = useState(false)
-    const [isSaving, setIsSaving] = useState(false)
-
-    const previewRef = useRef<ProjectPreviewRef>(null)
-
-    const fetchProject = async () => {
-        try {
-            const { data } = await api.get(`/api/user/project/${projectId}`)
-            setProject(data.project)
-            setIsGenerating(data.project.current_code ? false : true)
-            setLoading(false)
-        } catch (error: any) {
-            toast.error(error?.response?.data?.message || error.massage)
-            console.log(error);
-        }
-    }
-
-    const saveProject = async () => {
-
-    }
-
-    // download code (index.html)
-    const downloadCode = () => {
-        const code = previewRef.current?.getCode() || project?.current_code;
-        if (!code) {
-            if (isGenerating) {
-                return
-            }
-            return
-        }
-        const element = document.createElement('a');
-        const file = new Blob([code], { type: "text/html" })
-        element.href = URL.createObjectURL(file)
-        element.download = "index.html"
-        document.body.appendChild(element)
-        element.click();
-    }
-
-    const togglePublish = async () => {
-
-    }
-
-    useEffect(() => {
-        if (session?.user) {
-            fetchProject();
-        } else if (!isPending && !session?.user) {
-            navigate("/")
-            toast("Please login to view your projects")
-        }
-    }, [session, isPending])
-
-
-    useEffect(() => {
-        if (project && !project.current_code) {
-            const intervalId = setInterval(fetchProject, 10000);
-            return () => clearInterval(intervalId)
-        }
-    }, [project])
-
-    if (loading) {
-        return (
-            <>
-                <div className="flex items-center justify-center h-screen">
-                    <Loader2Icon className="size-7 animate-spin text-violet-200" />
-                </div>
-            </>
-        )
-    }
-
-    return project
-        ?
-        (
-            <div className='flex flex-col h-screen w-full bg-gray-900 text-white'>
-                {/* builder navbar  */}
-                <div className='flex max-sm:flex-col sm:items-center gap-4 px-4 py-2 no-scrollbar'>
-                    {/* left  */}
-                    <div className='flex items-center gap-2 sm:min-w-90 text-nowrap'>
-                        <img src="/favicon.svg" alt="logo" className="h-6 cursor-pointer" onClick={() => navigate('/')} />
-                        <div className='max-w-64 sm:max-w-xs'>
-                            <p className='text-sm text-medium capitalize truncate'>{project.name}</p>
-                            <p className='text-xs text-gray-400 -mt-0.5'>Previewing last saved version</p>
-                        </div>
-                        <div className='sm:hidden flex-1 flex justify-end'>
-                            {isMenuOpen ?
-                                <MessageSquareIcon onClick={() => setIsMenuOpen(false)} className="size-6 cursor-pointer" />
-                                : <XIcon onClick={() => setIsMenuOpen(true)} className="size-6 cursor-pointer" />}
-                        </div>
-                    </div>
-                    {/* middle  */}
-                    <div className='hidden sm:flex gap-2 bg-gray-950 p-1.5 rounded-md'>
-                        <SmartphoneIcon onClick={() => setDevice('phone')} className={`size-6 p-1 rounded cursor-pointer ${device === 'phone' ? "bg-gray-700" : ""}`} />
-
-                        <TabletIcon onClick={() => setDevice('tablet')} className={`size-6 p-1 rounded cursor-pointer ${device === 'tablet' ? "bg-gray-700" : ""}`} />
-
-                        <LaptopIcon onClick={() => setDevice('desktop')} className={`size-6 p-1 rounded cursor-pointer ${device === 'desktop' ? "bg-gray-700" : ""}`} />
-                    </div>
-                    {/* right  */}
-                    <div className='flex items-center justify-end gap-3 flex-1 text-xs sm:text-sm'>
-                        <button onClick={saveProject} disabled={isSaving} className='max-sm:hidden bg-gray-800 hover:bg-gray-700 text-white px-3.5 py-1 flex items-center gap-2 rounded sm:rounded-sm transition-colors border border-gray-700'>
-                            {isSaving ? <Loader2Icon className="animate-spin" size={16} /> : <SaveIcon size={16} />} Save
-                        </button>
-                        <Link target='_blank' to={`/preview/${projectId}`} className="flex items-center gap-2 px-4 py-1 rounded sm:rounded-sm border border-gray-700 hover:border-gray-500 transition-colors">
-                            <FullscreenIcon size={16} /> Preview
-                        </Link>
-                        <button onClick={downloadCode} className='bg-linear-to-br from-blue-700 to-blue-600 hover:from-blue-600 hover:to-blue-500 text-white px-3.5 py-1 flex items-center gap-2 rounded sm:rounded-sm transition-colors'>
-                            <ArrowBigDownDashIcon size={16} /> Download
-                        </button>
-                        <button onClick={togglePublish} className='bg-linear-to-br from-indigo-700 to-indigo-600 hover:from-indigo-600 hover:to-indigo-500 text-white px-3.5 py-1 flex items-center gap-2 rounded sm:rounded-sm transition-colors'>
-                            {project.isPublished ?
-                                <EyeOffIcon size={16} /> : <EyeIcon size={16} />
-                            }
-                            {project.isPublished ? "Unpublish" : "Publish"}
-                        </button>
-                    </div>
-                </div>
-
-                <div className='flex-1 flex overflow-auto'>
-                    <Sidebar isMenuOpen={isMenuOpen} project={project} setProject={(p) => setProject(p)} isGenerating={isGenerating} setIsGenerating={setIsGenerating} />
-
-                    <div className='flex-1 p-2 pl-0'>
-                        <ProjectPreview ref={previewRef} project={project} isGenerating={isGenerating} device={device} />
-                    </div>
-                </div>
-
-
-
-            </div>
-        )
-        :
-        (
-            <div className='flex items-center justify-center h-screen'>
-                <p className="text-2xl font-medium text-gray-200">Unable to load project!</p>
-            </div>
-        )
-}
-
-export default Projects
-</file>
-
-<file path="server/package.json">
-{
-  "name": "server",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "type": "module",
-  "scripts": {
-    "start": "tsx server.ts",
-    "server": "nodemon --exec tsx server.ts",
-    "build": "tsc"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "@prisma/adapter-pg": "^7.9.1",
-    "@prisma/client": "^7.9.1",
-    "better-auth": "^1.6.29",
-    "cors": "^2.8.6",
-    "dotenv": "^17.4.2",
-    "express": "^5.2.1",
-    "openai": "^7.4.0",
-    "pg": "^8.23.0"
-  },
-  "devDependencies": {
-    "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.6",
-    "@types/node": "^26.2.0",
-    "@types/pg": "^8.21.0",
-    "nodemon": "^3.1.14",
-    "prisma": "^7.9.1",
-    "ts-node": "^10.9.2",
-    "tsx": "^4.23.12",
-    "typescript": "^7.0.2"
   }
 }
 </file>
@@ -14469,103 +14395,130 @@ export const iframeScript = `
 `;
 </file>
 
-<file path="client/src/components/Navbar.tsx">
-import React, { useEffect, useState } from 'react'
-import { assets } from '../assets/assets';
-import { Link, useNavigate } from 'react-router-dom';
-import { authClient } from '@/lib/auth-client';
-import { UserButton } from '@daveyplate/better-auth-ui'
-import api from '@/configs/axios';
-import { toast } from 'sonner';
+<file path="client/src/components/ProjectPreview.tsx">
+import React, { forwardRef, useRef, useState, useEffect, useImperativeHandle } from 'react'
+import type { Project } from '../types';
+import { iframeScript } from '../assets/assets';
+import EditorPanel from './EditorPanel';
+import LoaderSteps from './LoaderSteps';
 
-const Navbar = () => {
-    const [menuOpen, setMenuOpen] = React.useState(false);
-    const navigate = useNavigate()
-    const [credits, setCredits] = useState(0)
+interface ProjectPreviewProps {
+    project: Project;
+    isGenerating: boolean;
+    device?: 'phone' | 'tablet' | 'desktop';
+    showEditorPanel?: boolean;
 
-    const { data: session } = authClient.useSession()
+}
 
-    const getCredits = async () => {
-        try {
-            const { data } = await api.get('/api/user/credits');
-            setCredits(data.credits)
-        } catch (error: any) {
-            toast.error(error?.response?.data?.message || error.message)
-            console.log(error);
+export interface ProjectPreviewRef {
+    getCode: () => string | undefined;
+}
+
+
+const ProjectPreview = forwardRef<ProjectPreviewRef, ProjectPreviewProps>(({ project, isGenerating, device = 'desktop', showEditorPanel = true }, ref) => {
+
+    const iframeRef = useRef<HTMLIFrameElement>(null)
+
+    const [selectedElement, setSelectedElement] = useState<any>(null)
+
+    const resolutions = {
+        phone: 'w-[412px]',
+        tablet: 'w-[768px]',
+        desktop: 'w-full'
+
+    }
+
+    useImperativeHandle(ref, () => ({
+        getCode: () => {
+            const doc = iframeRef.current?.contentDocument;
+            if (!doc) return undefined;
+
+            // 1. Remove our selection class / attributes / outline from all elements
+            doc.querySelectorAll('.ai-selected-element,[data-ai-selected').forEach((el) => {
+                el.classList.remove('ai-selected-element');
+                el.removeAttribute('data-ai-selected');
+                (el as HTMLElement).style.outline = '';
+            })
+
+            // 2. Remove inject style + script from the document
+            const previewStyle = doc.getElementById('ai-preview-style');
+            if (previewStyle) previewStyle.remove();
+
+            const previewScript = doc.getElementById('ai-preview-script');
+            if (previewScript) previewScript.remove()
+
+            // 3. Serialize clean HTML
+            const html = doc.documentElement.outerHTML;
+            return html;
+
+        }
+    }))
+
+    useEffect(() => {
+        const handleMesaage = (event: MessageEvent) => {
+            if (event.data.type === 'ELEMENT_SELECTED') {
+                setSelectedElement(event.data.payload);
+            } else if (event.data.type === 'CLEAR_SELECTION') {
+                setSelectedElement(null)
+            }
+        }
+        window.addEventListener('message', handleMesaage)
+        return () => window.removeEventListener('message', handleMesaage)
+    }, [])
+
+    const handleUpdate = (updates: any) => {
+        if (iframeRef.current?.contentWindow) {
+            iframeRef.current.contentWindow.postMessage({
+                type: 'UPDATE_ELEMENT',
+                payload: updates
+            }, '*')
         }
     }
 
-    useEffect(() => {
-        if (session?.user) {
-            getCredits()
+
+    const injectPreview = (html: string) => {
+        if (!html) return '';
+        if (!showEditorPanel) return html;
+
+        if (!html.includes('</body>')) {
+            return html.replace('</body>', iframeScript + '</body>')
+        } else {
+            return html + iframeScript;
         }
-    }, [session?.user])
+    }
 
     return (
-        <>
-            <nav className="z-50 flex items-center justify-between w-full py-4 px-4 md:px-16 lg:px-24 xl:px-32 backdrop-blur border-b text-white border-slate-800">
-                <Link to="/">
-                    <img src={assets.ForgeSite} alt="logo" className='h-5 sm:h-7' />
-                </Link>
-
-                <div className="hidden md:flex items-center gap-8 transition duration-500">
-                    <Link to="/">Home</Link>
-                    <Link to="/projects">My Projects</Link>
-                    <Link to="/community">Community</Link>
-                    <Link to="/pricing">Pricing</Link>
-
-
-                </div>
-
-                <div className="flex items-center gap-3">
-
-                    {!session?.user ? (
-                        <button onClick={() => navigate('/auth/signin')} className="px-6 py-1.5 max-sm:text-sm bg-indigo-600 active:scale-95 hover:bg-indigo-700 transition rounded">
-                            Get started
-                        </button>
-                    ) : (
-                        <>
-                            <button className='bg-white/10 px-5 py-1.5 text-xs sm:text-sm border text-gray-200 rounded-full'>
-                                Credits : <span className='text-indigo-300'>{credits}</span>
-                            </button>
-                            <UserButton size='icon' />
-                        </>
-                    )
-                    }
-
-                    <button id="open-menu" className="md:hidden active:scale-90 transition" onClick={() => setMenuOpen(true)} >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5h16" /><path d="M4 12h16" /><path d="M4 19h16" /></svg>
-                    </button>
-                </div>
-
-
-            </nav >
-
-            {/* Mobile Menu */}
-            {
-                menuOpen && (
-                    <div className="fixed inset-0 z-[100] bg-black/60 text-white backdrop-blur flex flex-col items-center justify-center text-lg gap-8 md:hidden transition-transform duration-300">
-                        <Link to='/' onClick={() => setMenuOpen(false)}>Home</Link>
-                        <Link to='/projects' onClick={() => setMenuOpen(false)}>My Projects</Link>
-                        <Link to='/community' onClick={() => setMenuOpen(false)}>Community</Link>
-                        <Link to='/pricing' onClick={() => setMenuOpen(false)}>Pricing</Link>
-
-                        <button className="active:ring-3 active:ring-white aspect-square size-10 p-1 items-center justify-center bg-slate-100 hover:bg-slate-200 transition text-black rounded-md flex" onClick={() => setMenuOpen(false)} >
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
-                        </button>
-                    </div>
+        <div className='relative h-full bg-gray-900 flex-1 rounded-xl overflow-hidden max-sm:ml-2'>
+            {project.current_code
+                ?
+                (
+                    <>
+                        <iframe
+                            ref={iframeRef}
+                            srcDoc={injectPreview(project.current_code)}
+                            className={`h-full max-sm:w-full ${resolutions[device]} mx-auto transition-all`} />
+                        {showEditorPanel && selectedElement && (
+                            <EditorPanel selectedElement={selectedElement}
+                                onUpdate={handleUpdate} onClose={() => {
+                                    setSelectedElement(null);
+                                    if (iframeRef.current?.contentWindow) {
+                                        iframeRef.current.contentWindow.postMessage({ type: 'CLEAR_SELECTION_REQUEST' }, '*')
+                                    }
+                                }} />
+                        )}
+                    </>
+                )
+                :
+                isGenerating && (
+                    <LoaderSteps />
                 )
             }
-            {/* BACKGROUND IMAGE */}
-            <img src="https://raw.githubusercontent.com/prebuiltui/prebuiltui/refs/heads/main/assets/hero/bg-gradient-2.png" className="absolute inset-0 -z-10 size-full opacity" alt="" />
 
-
-
-        </>
+        </div>
     )
-}
+})
 
-export default Navbar
+export default ProjectPreview
 </file>
 
 <file path="client/src/index.css">
@@ -14732,6 +14685,7 @@ import { toNodeHandler } from 'better-auth/node';
 import { auth } from './lib/auth.js';
 import userRouter from './routes/userRoutes.js';
 import projectRouter from './routes/projectRoutes.js';
+import { stripeWebhook } from './controllers/stripeWebhook.js';
 
 const app = express();
 
@@ -14743,6 +14697,7 @@ const corsOptions = {
 }
 
 app.use(cors(corsOptions))
+app.post('/api/stripe', express.raw({ type: 'application/json' }), stripeWebhook)
 
 app.all('/api/auth/{*any}', toNodeHandler(auth));
 
@@ -14762,6 +14717,285 @@ app.listen(port, () => {
 });
 </file>
 
+<file path="client/src/components/Navbar.tsx">
+import React, { useEffect, useState } from 'react'
+import { assets } from '../assets/assets';
+import { Link, useNavigate } from 'react-router-dom';
+import { authClient } from '@/lib/auth-client';
+import { UserButton } from '@daveyplate/better-auth-ui'
+import api from '@/configs/axios';
+import { toast } from 'sonner';
+
+const Navbar = () => {
+    const [menuOpen, setMenuOpen] = React.useState(false);
+    const navigate = useNavigate()
+    const [credits, setCredits] = useState(0)
+
+    const { data: session } = authClient.useSession()
+
+    const getCredits = async () => {
+        try {
+            const { data } = await api.get('/api/user/credits');
+            setCredits(data.credits)
+        } catch (error: any) {
+            toast.error(error?.response?.data?.message || error.message)
+            console.log(error);
+        }
+    }
+
+    useEffect(() => {
+        if (session?.user) {
+            getCredits()
+        }
+    }, [session?.user])
+
+    return (
+        <>
+            <nav className="z-50 flex items-center justify-between w-full py-4 px-4 md:px-16 lg:px-24 xl:px-32 backdrop-blur border-b text-white border-slate-800">
+                <Link to="/">
+                    <img src={assets.ForgeSite} alt="logo" className='h-5 sm:h-7' />
+                </Link>
+
+                <div className="hidden md:flex items-center gap-8 transition duration-500">
+                    <Link to="/">Home</Link>
+                    <Link to="/projects">My Projects</Link>
+                    <Link to="/community">Community</Link>
+                    <Link to="/pricing">Pricing</Link>
+
+
+                </div>
+
+                <div className="flex items-center gap-3">
+
+                    {!session?.user ? (
+                        <button onClick={() => navigate('/auth/signin')} className="px-6 py-1.5 max-sm:text-sm bg-indigo-600 active:scale-95 hover:bg-indigo-700 transition rounded">
+                            Get started
+                        </button>
+                    ) : (
+                        <>
+                            <button className='bg-white/10 px-5 py-1.5 text-xs sm:text-sm border text-gray-200 rounded-full'>
+                                Credits : <span className='text-indigo-300'>{credits}</span>
+                            </button>
+                            <UserButton size='icon' />
+                        </>
+                    )
+                    }
+
+                    <button id="open-menu" className="md:hidden active:scale-90 transition" onClick={() => setMenuOpen(true)} >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5h16" /><path d="M4 12h16" /><path d="M4 19h16" /></svg>
+                    </button>
+                </div>
+
+
+            </nav >
+
+            {/* Mobile Menu */}
+            {
+                menuOpen && (
+                    <div className="fixed inset-0 z-[100] bg-black/60 text-white backdrop-blur flex flex-col items-center justify-center text-lg gap-8 md:hidden transition-transform duration-300">
+                        <Link to='/' onClick={() => setMenuOpen(false)}>Home</Link>
+                        <Link to='/projects' onClick={() => setMenuOpen(false)}>My Projects</Link>
+                        <Link to='/community' onClick={() => setMenuOpen(false)}>Community</Link>
+                        <Link to='/pricing' onClick={() => setMenuOpen(false)}>Pricing</Link>
+
+                        <button className="active:ring-3 active:ring-white aspect-square size-10 p-1 items-center justify-center bg-slate-100 hover:bg-slate-200 transition text-black rounded-md flex" onClick={() => setMenuOpen(false)} >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+                        </button>
+                    </div>
+                )
+            }
+            {/* BACKGROUND IMAGE */}
+            <img src="https://raw.githubusercontent.com/prebuiltui/prebuiltui/refs/heads/main/assets/hero/bg-gradient-2.png" className="absolute inset-0 -z-10 size-full opacity" alt="" />
+
+
+
+        </>
+    )
+}
+
+export default Navbar
+</file>
+
+<file path="client/src/pages/Projects.tsx">
+import React, { useEffect, useState, useRef } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import type { Project } from '../types'
+import { ArrowBigDownDashIcon, EyeIcon, EyeOffIcon, FullscreenIcon, LaptopIcon, Loader2Icon, MessageSquareIcon, SaveIcon, SmartphoneIcon, TabletIcon, XIcon } from 'lucide-react'
+import Sidebar from '../components/Sidebar'
+import ProjectPreview, { type ProjectPreviewRef } from '../components/ProjectPreview'
+import api from '@/configs/axios'
+import { toast } from 'sonner'
+import { authClient } from '@/lib/auth-client'
+
+const Projects = () => {
+    const { projectId } = useParams()
+    const navigate = useNavigate()
+    const { data: session, isPending } = authClient.useSession()
+
+    const [project, setProject] = useState<Project | null>(null)
+    const [loading, setLoading] = useState(true)
+
+    const [isGenerating, setIsGenerating] = useState(true)
+    const [device, setDevice] = useState<'phone' | 'tablet' | 'desktop'>("desktop")
+
+    const [isMenuOpen, setIsMenuOpen] = useState(false)
+    const [isSaving, setIsSaving] = useState(false)
+
+    const previewRef = useRef<ProjectPreviewRef>(null)
+
+    const fetchProject = async () => {
+        try {
+            const { data } = await api.get(`/api/user/project/${projectId}`)
+            setProject(data.project)
+            setIsGenerating(data.project.current_code ? false : true)
+            setLoading(false)
+        } catch (error: any) {
+            toast.error(error?.response?.data?.message || error.massage)
+            console.log(error);
+        }
+    }
+
+    const saveProject = async () => {
+        if (!previewRef.current) return;
+        const code = previewRef.current.getCode();
+        if (!code) return;
+        setIsSaving(true);
+        try {
+            const { data } = await api.put(`/api/project/save/${projectId}`, { code });
+            toast.success(data.message)
+        } catch (error: any) {
+            toast.error(error?.response?.data?.message || error.message);
+            console.log(error);
+        } finally {
+            setIsSaving(false);
+        }
+    }
+
+    // download code (index.html)
+    const downloadCode = () => {
+        const code = previewRef.current?.getCode() || project?.current_code;
+        if (!code) {
+            if (isGenerating) {
+                return
+            }
+            return
+        }
+        const element = document.createElement('a');
+        const file = new Blob([code], { type: "text/html" })
+        element.href = URL.createObjectURL(file)
+        element.download = "index.html"
+        document.body.appendChild(element)
+        element.click();
+    }
+
+    const togglePublish = async () => {
+        try {
+            const { data } = await api.get(`/api/user/publish-toggle/${projectId}`);
+            toast.success(data.message)
+            setProject((prev) => prev ? ({ ...prev, isPublished: !prev.isPublished }) : null)
+        } catch (error: any) {
+            toast.error(error?.response?.data?.message || error.message);
+            console.log(error);
+        }
+    }
+
+    useEffect(() => {
+        if (session?.user) {
+            fetchProject();
+        } else if (!isPending && !session?.user) {
+            navigate("/")
+            toast("Please login to view your projects")
+        }
+    }, [session, isPending])
+
+
+    useEffect(() => {
+        if (project && !project.current_code) {
+            const intervalId = setInterval(fetchProject, 10000);
+            return () => clearInterval(intervalId)
+        }
+    }, [project])
+
+    if (loading) {
+        return (
+            <>
+                <div className="flex items-center justify-center h-screen">
+                    <Loader2Icon className="size-7 animate-spin text-violet-200" />
+                </div>
+            </>
+        )
+    }
+
+    return project
+        ?
+        (
+            <div className='flex flex-col h-screen w-full bg-gray-900 text-white'>
+                {/* builder navbar  */}
+                <div className='flex max-sm:flex-col sm:items-center gap-4 px-4 py-2 no-scrollbar'>
+                    {/* left  */}
+                    <div className='flex items-center gap-2 sm:min-w-90 text-nowrap'>
+                        <img src="/favicon.svg" alt="logo" className="h-6 cursor-pointer" onClick={() => navigate('/')} />
+                        <div className='max-w-64 sm:max-w-xs'>
+                            <p className='text-sm text-medium capitalize truncate'>{project.name}</p>
+                            <p className='text-xs text-gray-400 -mt-0.5'>Previewing last saved version</p>
+                        </div>
+                        <div className='sm:hidden flex-1 flex justify-end'>
+                            {isMenuOpen ?
+                                <MessageSquareIcon onClick={() => setIsMenuOpen(false)} className="size-6 cursor-pointer" />
+                                : <XIcon onClick={() => setIsMenuOpen(true)} className="size-6 cursor-pointer" />}
+                        </div>
+                    </div>
+                    {/* middle  */}
+                    <div className='hidden sm:flex gap-2 bg-gray-950 p-1.5 rounded-md'>
+                        <SmartphoneIcon onClick={() => setDevice('phone')} className={`size-6 p-1 rounded cursor-pointer ${device === 'phone' ? "bg-gray-700" : ""}`} />
+
+                        <TabletIcon onClick={() => setDevice('tablet')} className={`size-6 p-1 rounded cursor-pointer ${device === 'tablet' ? "bg-gray-700" : ""}`} />
+
+                        <LaptopIcon onClick={() => setDevice('desktop')} className={`size-6 p-1 rounded cursor-pointer ${device === 'desktop' ? "bg-gray-700" : ""}`} />
+                    </div>
+                    {/* right  */}
+                    <div className='flex items-center justify-end gap-3 flex-1 text-xs sm:text-sm'>
+                        <button onClick={saveProject} disabled={isSaving} className='max-sm:hidden bg-gray-800 hover:bg-gray-700 text-white px-3.5 py-1 flex items-center gap-2 rounded sm:rounded-sm transition-colors border border-gray-700'>
+                            {isSaving ? <Loader2Icon className="animate-spin" size={16} /> : <SaveIcon size={16} />} Save
+                        </button>
+                        <Link target='_blank' to={`/preview/${projectId}`} className="flex items-center gap-2 px-4 py-1 rounded sm:rounded-sm border border-gray-700 hover:border-gray-500 transition-colors">
+                            <FullscreenIcon size={16} /> Preview
+                        </Link>
+                        <button onClick={downloadCode} className='bg-linear-to-br from-blue-700 to-blue-600 hover:from-blue-600 hover:to-blue-500 text-white px-3.5 py-1 flex items-center gap-2 rounded sm:rounded-sm transition-colors'>
+                            <ArrowBigDownDashIcon size={16} /> Download
+                        </button>
+                        <button onClick={togglePublish} className='bg-linear-to-br from-indigo-700 to-indigo-600 hover:from-indigo-600 hover:to-indigo-500 text-white px-3.5 py-1 flex items-center gap-2 rounded sm:rounded-sm transition-colors'>
+                            {project.isPublished ?
+                                <EyeOffIcon size={16} /> : <EyeIcon size={16} />
+                            }
+                            {project.isPublished ? "Unpublish" : "Publish"}
+                        </button>
+                    </div>
+                </div>
+
+                <div className='flex-1 flex overflow-auto'>
+                    <Sidebar isMenuOpen={isMenuOpen} project={project} setProject={(p) => setProject(p)} isGenerating={isGenerating} setIsGenerating={setIsGenerating} />
+
+                    <div className='flex-1 p-2 pl-0'>
+                        <ProjectPreview ref={previewRef} project={project} isGenerating={isGenerating} device={device} />
+                    </div>
+                </div>
+
+
+
+            </div>
+        )
+        :
+        (
+            <div className='flex items-center justify-center h-screen'>
+                <p className="text-2xl font-medium text-gray-200">Unable to load project!</p>
+            </div>
+        )
+}
+
+export default Projects
+</file>
+
 <file path="client/src/App.tsx">
 import React from 'react'
 import { Route, Routes, useLocation } from 'react-router-dom'
@@ -14777,6 +15011,7 @@ import { Toaster } from 'sonner'
 import AuthPage from './pages/auth/AuthPage'
 import Settings from './pages/Settings'
 import Footer from './components/Footer'
+import Loading from './pages/Loading'
 
 
 
@@ -14807,6 +15042,7 @@ const App = () => {
         <Route path='/view/:projectId' element={<View />} />
         <Route path="/auth/:pathname" element={<AuthPage />} />
         <Route path="/account/settings" element={<Settings />} />
+        <Route path='/loading' element={<Loading />} />
       </Routes>
       {!hideFooter && <Footer />}
     </div>

@@ -12,6 +12,7 @@ import { Toaster } from 'sonner'
 import AuthPage from './pages/auth/AuthPage'
 import Settings from './pages/Settings'
 import Footer from './components/Footer'
+import Loading from './pages/Loading'
 
 
 
@@ -42,6 +43,7 @@ const App = () => {
         <Route path='/view/:projectId' element={<View />} />
         <Route path="/auth/:pathname" element={<AuthPage />} />
         <Route path="/account/settings" element={<Settings />} />
+        <Route path='/loading' element={<Loading />} />
       </Routes>
       {!hideFooter && <Footer />}
     </div>
