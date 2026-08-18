@@ -14,19 +14,6 @@
 
 ---
 
-## 📖 Table of Contents
-- [About the Project](#-about-the-project)
-- [Features](#-features)
-- [Tech Stack](#-tech-stack)
-- [Getting Started](#-getting-started)
-  - [Prerequisites](#prerequisites)
-  - [Environment Variables](#environment-variables)
-  - [Installation & Setup](#installation--setup)
-- [Deployment](#-deployment)
-- [License](#-license)
-
----
-
 ## 🌟 About the Project
 
 **ForgeSite AI** is a powerful full-stack website builder designed to eliminate the friction between an idea and a live webpage. By simply typing a prompt, users can generate a fully functional, mobile-responsive, single-page website powered by Tailwind CSS and modern AI models. 
