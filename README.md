@@ -1,122 +1,155 @@
-# 🚀 ForgeSite AI
+<div align="center">
+  <img src="client/public/favicon.svg" alt="ForgeSite AI Logo" width="100" />
+  <h1>🚀 ForgeSite AI</h1>
+  <p><strong>Turn your thoughts into complete, responsive websites instantly with AI.</strong></p>
 
-ForgeSite AI is a full-stack, AI-powered website builder that allows users to turn their thoughts into complete, responsive websites instantly. Built with modern web technologies, it features a credit-based system, AI-driven code generation, live previews, and website revision tracking.
+  <p>
+    <img src="https://img.shields.io/badge/React-19-blue?style=for-the-badge&logo=react" alt="React" />
+    <img src="https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" />
+    <img src="https://img.shields.io/badge/Tailwind_CSS-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white" alt="Tailwind CSS" />
+    <img src="https://img.shields.io/badge/Express-000000?style=for-the-badge&logo=express&logoColor=white" alt="Express" />
+    <img src="https://img.shields.io/badge/Prisma-2D3748?style=for-the-badge&logo=prisma&logoColor=white" alt="Prisma" />
+  </p>
+</div>
+
+---
+
+## 📖 Table of Contents
+- [About the Project](#-about-the-project)
+- [Features](#-features)
+- [Tech Stack](#-tech-stack)
+- [Getting Started](#-getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Environment Variables](#environment-variables)
+  - [Installation & Setup](#installation--setup)
+- [Deployment](#-deployment)
+- [License](#-license)
+
+---
+
+## 🌟 About the Project
+
+**ForgeSite AI** is a powerful full-stack website builder designed to eliminate the friction between an idea and a live webpage. By simply typing a prompt, users can generate a fully functional, mobile-responsive, single-page website powered by Tailwind CSS and modern AI models. 
+
+Users can seamlessly refine their generated sites through conversational revisions, track versions to easily rollback mistakes, and securely purchase credits for continued usage.
 
 ---
 
 ## ✨ Features
 
-- **AI-Powered Website Generation:** Generate complete, single-page websites just by typing a description.
-- **Iterative Revisions:** Refine and update the generated website through conversational prompts.
-- **Version Control:** Automatic versioning allows you to roll back to any previous state of your website.
-- **Live Preview:** Real-time preview of the generated HTML/TailwindCSS code.
-- **Community Showcase:** Publish your creations for others to see in the community section.
-- **Credit-Based System:** Secure credit purchasing system powered by Stripe.
-- **Authentication:** Secure user authentication using Better-Auth.
+- **🧠 AI-Powered Generation:** Type a description and watch your website come to life in seconds.
+- **🔄 Conversational Revisions:** Ask the AI to change colors, add sections, or tweak the layout.
+- **🕰️ Version Control:** Automatic snapshots allow you to roll back to any previous version effortlessly.
+- **👁️ Live Preview:** Real-time side-by-side view of the generated code and the rendered website.
+- **🌐 Community Showcase:** Publish your best designs to the community feed.
+- **💳 Credit System:** Integrated Stripe billing for purchasing AI credits securely.
+- **🔒 Secure Authentication:** Handled seamlessly via Better-Auth.
 
 ---
 
 ## 🛠️ Tech Stack
 
-### Frontend (Client)
+### **Frontend (Client)**
 - **Framework:** React 19 + TypeScript + Vite
 - **Styling:** Tailwind CSS 4
 - **Routing:** React Router DOM v7
-- **UI Components:** Shadcn UI, Better-Auth UI, Lucide Icons
-- **State/Requests:** Axios, Sonner (Toasts)
+- **UI Components:** Shadcn UI, Better-Auth UI, Lucide React (Icons)
+- **State/Notifications:** Sonner (Toasts), Axios (API Client)
 
-### Backend (Server)
+### **Backend (Server)**
 - **Framework:** Node.js + Express 5
 - **Language:** TypeScript
 - **Database:** PostgreSQL (Neon Serverless)
 - **ORM:** Prisma
 - **Authentication:** Better-Auth
-- **AI Integration:** OpenRouter API (`z-ai/glm-5.2:free` model)
+- **AI Integration:** OpenRouter API (`z-ai/glm-5.2:free`)
 - **Payments:** Stripe API & Webhooks
 
 ---
 
 ## 🚀 Getting Started
 
-### Prerequisites
-- Node.js (v18+)
-- PostgreSQL Database (e.g., Neon.tech)
-- OpenRouter API Key
-- Stripe Account (for payments)
+Follow these steps to set up the project locally on your machine.
 
-### 1. Clone the repository
+### Prerequisites
+
+Make sure you have the following installed and set up:
+- **Node.js** (v18 or higher)
+- **PostgreSQL** Database (e.g., [Neon.tech](https://neon.tech))
+- **OpenRouter Account** (for your AI API Key)
+- **Stripe Account** (for payment integration)
+
+### Environment Variables
+
+Before running the project, you need to configure your environment variables.
+
+#### Backend (`server/.env`)
+| Variable | Description |
+|----------|-------------|
+| `PORT` | Server port (default: `3000`) |
+| `NODE_ENV` | Set to `development` locally |
+| `TRUSTED_ORIGINS` | Your frontend URL (e.g., `http://localhost:5173`) |
+| `BETTER_AUTH_URL` | Your backend URL (e.g., `http://localhost:3000`) |
+| `BETTER_AUTH_SECRET` | A secure random string for authentication |
+| `DATABASE_URL` | Your PostgreSQL connection string |
+| `AI_API_KEY` | Your OpenRouter API Key |
+| `STRIPE_SECRET_KEY` | Your Stripe secret key |
+| `STRIPE_WEBHOOK_SECRET` | Your Stripe webhook signing secret |
+
+#### Frontend (`client/.env`)
+| Variable | Description |
+|----------|-------------|
+| `VITE_BASEURL` | Your backend API URL (e.g., `http://localhost:3000`) |
+
+
+### Installation & Setup
+
+**1. Clone the repository**
 ```bash
 git clone https://github.com/yourusername/forgesite-ai.git
 cd forgesite-ai
 ```
 
-### 2. Backend Setup
+**2. Setup the Backend**
 ```bash
 cd server
 npm install
-```
 
-Create a `.env` file in the `server` directory:
-```env
-PORT=3000
-NODE_ENV=development
-
-# Frontend URL
-TRUSTED_ORIGINS=http://localhost:5173
-BETTER_AUTH_URL=http://localhost:3000
-BETTER_AUTH_SECRET=your_super_secret_string
-
-# Database
-DATABASE_URL=postgresql://user:password@host/db?sslmode=require
-
-# AI & Payments
-AI_API_KEY=your_openrouter_api_key
-STRIPE_SECRET_KEY=your_stripe_secret_key
-STRIPE_WEBHOOK_SECRET=your_stripe_webhook_secret
-```
-
-Run database migrations and start the server:
-```bash
+# Run database migrations and generate Prisma client
 npx prisma generate
 npx prisma db push
+
+# Start the development server
 npm run dev
 ```
 
-### 3. Frontend Setup
+**3. Setup the Frontend**
+Open a new terminal window:
 ```bash
 cd client
 npm install
-```
 
-Create a `.env` file in the `client` directory:
-```env
-VITE_BASEURL=http://localhost:3000
-```
-
-Start the frontend development server:
-```bash
+# Start the frontend development server
 npm run dev
 ```
 
+The frontend will be available at `http://localhost:5173` and the backend at `http://localhost:3000`.
+
 ---
 
-## 📦 Deployment Guide
+## 📦 Deployment
 
-The project is configured to be easily deployed for **free** using Vercel (Frontend) and Render (Backend).
+The repository is structured to be easily deployed for **free** on platforms like Render and Vercel.
 
-### Backend (Render)
-1. Push your code to GitHub.
-2. Create a new **Web Service** on Render pointing to the `server` directory.
-3. Set the build command to `npm install && npm run build` and start command to `npm run start`.
-4. Add all environment variables (update `TRUSTED_ORIGINS` to your Vercel URL and `BETTER_AUTH_URL` to your Render URL).
+1. **Backend (Render):** 
+   - Deploy the `server` directory as a Node Web Service. 
+   - Set Build Command: `npm install && npm run build`
+   - Set Start Command: `npm run start`
+2. **Frontend (Vercel):** 
+   - Deploy the `client` directory.
+   - Vite is automatically detected. Vercel will use the provided `vercel.json` for SPA rewrites to ensure routing works perfectly.
 
-### Frontend (Vercel)
-1. Import the repository in Vercel.
-2. Set the Root Directory to `client`.
-3. Add the `VITE_BASEURL` environment variable pointing to your Render backend URL.
-4. Deploy (the `vercel.json` file handles SPA routing automatically).
-
-> **Note:** Don't forget to update your Stripe Webhook endpoint with your live backend URL!
+*Remember to update your environment variables in both platforms (specifically `TRUSTED_ORIGINS`, `BETTER_AUTH_URL`, and Stripe webhook URLs).*
 
 ---
 
