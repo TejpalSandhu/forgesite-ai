@@ -1,5 +1,5 @@
 import prisma from '../lib/prisma.js';
-import openai from '../configs/openai.js';
+import { createCompletion, cleanCode } from '../configs/openai.js';
 // Controller Function to Make Revision
 export const makeRevision = async (req, res) => {
     const userId = req.userId;
@@ -37,12 +37,10 @@ export const makeRevision = async (req, res) => {
             data: { credits: { decrement: 5 } }
         });
         // Enhance user prompt
-        const promptEnhanceResponse = await openai.chat.completions.create({
-            model: 'z-ai/glm-5.2:free',
-            messages: [
-                {
-                    role: 'system',
-                    content: `
+        const promptEnhanceResponse = await createCompletion([
+            {
+                role: 'system',
+                content: `
                     You are an expert web developer. 
 
                     CRITICAL REQUIREMENTS:
@@ -64,14 +62,13 @@ export const makeRevision = async (req, res) => {
                     8. Do NOT use tailwind.config = {...} as a <script> object — Tailwind v4's CDN build does not support it and will silently ignore it. Do NOT define custom colors, keyframes, or animations this way. Use only Tailwind's built-in default utility classes and animations (animate-pulse, animate-ping, animate-bounce, animate-spin), or write plain custom CSS with real @keyframes directly inside the <style> tag if a custom animation is needed. Never gate content visibility behind opacity:0 + scroll-triggered reveal classes unless the reveal script is guaranteed to run — prefer content visible by default.
 
                     Apply the requested changes while maintaining the Tailwind CSS styling approach.`
-                },
-                {
-                    role: 'user',
-                    content: `User's request: "${message}"`
-                }
-            ]
-        });
-        const enhancedPrompt = promptEnhanceResponse.choices[0].message.content;
+            },
+            {
+                role: 'user',
+                content: `User's request: "${message}"`
+            }
+        ]);
+        const enhancedPrompt = promptEnhanceResponse;
         await prisma.conversation.create({
             data: {
                 role: 'assistant',
@@ -87,12 +84,10 @@ export const makeRevision = async (req, res) => {
             }
         });
         // Generate website code
-        const codeGenerationResponse = await openai.chat.completions.create({
-            model: 'z-ai/glm-5.2:free',
-            messages: [
-                {
-                    role: 'system',
-                    content: `
+        const codeGenerationResponse = await createCompletion([
+            {
+                role: 'system',
+                content: `
                     You are an expert web developer. 
 
                     CRITICAL REQUIREMENTS:
@@ -104,15 +99,16 @@ export const makeRevision = async (req, res) => {
                     - Return the HTML Code Only, nothing else
 
                     Apply the requested changes while maintaining the Tailwind CSS styling approach.`
-                },
-                {
-                    role: 'user',
-                    content: `
-                    Here is the current website code: "${currentProject.current_code}" The user wants this change: "${enhancedPrompt}"`
-                }
-            ]
-        });
-        const code = codeGenerationResponse.choices[0].message.content || '';
+            },
+            {
+                role: 'user',
+                content: currentProject.current_code
+                    ? `Here is the current website code: "${currentProject.current_code}" The user wants this change: "${enhancedPrompt}"`
+                    // Initial generation failed, so there is no code yet — build the site from scratch.
+                    : `There is no existing website yet. Create a complete website for this request: "${currentProject.initial_prompt}". Additional instructions: "${enhancedPrompt}"`
+            }
+        ]);
+        const code = cleanCode(codeGenerationResponse);
         if (!code) {
             await prisma.conversation.create({
                 data: {
@@ -125,13 +121,11 @@ export const makeRevision = async (req, res) => {
                 where: { id: userId },
                 data: { credits: { increment: 5 } }
             });
-            return;
+            return res.status(502).json({ message: 'Unable to generate the code, please try again' });
         }
         const version = await prisma.version.create({
             data: {
-                code: code.replace(/```[a-z]*\n?/gi, '')
-                    .replace(/```$/g, '')
-                    .trim(),
+                code,
                 description: 'changes made',
                 projectId
             }
@@ -146,9 +140,7 @@ export const makeRevision = async (req, res) => {
         await prisma.websiteProject.update({
             where: { id: projectId },
             data: {
-                current_code: code.replace(/```[a-z]*\n?/gi, '')
-                    .replace(/```$/g, '')
-                    .trim(),
+                current_code: code,
                 current_version_index: version.id
             }
         });

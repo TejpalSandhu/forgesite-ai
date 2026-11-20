@@ -111,8 +111,12 @@ const ProjectPreview = forwardRef<ProjectPreviewRef, ProjectPreviewProps>(({ pro
                     </>
                 )
                 :
-                isGenerating && (
+                isGenerating ? (
                     <LoaderSteps />
+                ) : (
+                    <div className='h-full flex items-center justify-center p-6 text-center text-sm text-gray-400'>
+                        No website yet — describe what you want in the chat to try again.
+                    </div>
                 )
             }
 

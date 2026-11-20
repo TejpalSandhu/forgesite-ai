@@ -1,5 +1,5 @@
 import prisma from '../lib/prisma.js';
-import openai from '../configs/openai.js';
+import { createCompletion, cleanCode } from '../configs/openai.js';
 import Stripe from 'stripe';
 // Get User Credits
 export const getUserCredits = async (req, res) => {
@@ -68,12 +68,10 @@ export const createUserProject = async (req, res) => {
 };
 async function generateWebsite(projectId, userId, initial_prompt) {
     try {
-        const promptEnhanceResponse = await openai.chat.completions.create({
-            model: 'z-ai/glm-5.2:free',
-            messages: [
-                {
-                    role: 'system',
-                    content: `
+        const promptEnhanceResponse = await createCompletion([
+            {
+                role: 'system',
+                content: `
                     You are a prompt enhancement specialist. Take the user's website request and expand it into a detailed, comprehensive prompt that will help create the best possible website.
 
                     Enhance this prompt by:
@@ -85,14 +83,13 @@ async function generateWebsite(projectId, userId, initial_prompt) {
                     6. Adding any missing but important elements
 
                     Return ONLY the enhanced prompt, nothing else. Make it detailed but concise (2-3 paragraphs max).`
-                },
-                {
-                    role: 'user',
-                    content: initial_prompt
-                }
-            ]
-        });
-        const enhancedPrompt = promptEnhanceResponse.choices[0].message.content;
+            },
+            {
+                role: 'user',
+                content: initial_prompt
+            }
+        ]);
+        const enhancedPrompt = promptEnhanceResponse;
         await prisma.conversation.create({
             data: {
                 role: 'assistant',
@@ -107,12 +104,10 @@ async function generateWebsite(projectId, userId, initial_prompt) {
                 projectId
             }
         });
-        const codeGenerationResponse = await openai.chat.completions.create({
-            model: 'z-ai/glm-5.2:free',
-            messages: [
-                {
-                    role: 'system',
-                    content: `
+        const codeGenerationResponse = await createCompletion([
+            {
+                role: 'system',
+                content: `
                      You are an expert web developer. Create a complete, production-ready, single-page website based on this request: "${enhancedPrompt}"
 
                     CRITICAL REQUIREMENTS:
@@ -141,14 +136,13 @@ async function generateWebsite(projectId, userId, initial_prompt) {
 
                     The HTML should be complete and ready to render as-is with Tailwind CSS.
                     8. Do NOT use tailwind.config = {...} as a <script> object — Tailwind v4's CDN build does not support it and will silently ignore it. Do NOT define custom colors, keyframes, or animations this way. Use only Tailwind's built-in default utility classes and animations (animate-pulse, animate-ping, animate-bounce, animate-spin), or write plain custom CSS with real @keyframes directly inside the <style> tag if a custom animation is needed. Never gate initial content visibility behind opacity:0 + scroll-triggered reveal classes unless the reveal script is guaranteed to run — prefer content visible by default.`
-                },
-                {
-                    role: 'user',
-                    content: enhancedPrompt || ''
-                }
-            ]
-        });
-        const code = codeGenerationResponse.choices[0].message.content || '';
+            },
+            {
+                role: 'user',
+                content: enhancedPrompt || ''
+            }
+        ]);
+        const code = cleanCode(codeGenerationResponse);
         if (!code) {
             await prisma.conversation.create({
                 data: {
@@ -165,7 +159,7 @@ async function generateWebsite(projectId, userId, initial_prompt) {
         }
         const version = await prisma.version.create({
             data: {
-                code: code.replace(/```[a-z]*\n?/gi, '').replace(/```$/g, '').trim(),
+                code,
                 description: 'Initial version',
                 projectId
             }
@@ -180,7 +174,7 @@ async function generateWebsite(projectId, userId, initial_prompt) {
         await prisma.websiteProject.update({
             where: { id: projectId },
             data: {
-                current_code: code.replace(/```[a-z]*\n?/gi, '').replace(/```$/g, '').trim(),
+                current_code: code,
                 current_version_index: version.id
             }
         });

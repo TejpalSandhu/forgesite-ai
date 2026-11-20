@@ -1,6 +1,6 @@
 import { Request, Response } from 'express'
 import prisma from '../lib/prisma.js';
-import openai from '../configs/openai.js';
+import { createCompletion, cleanCode } from '../configs/openai.js';
 import Stripe from 'stripe'
 
 
@@ -83,9 +83,7 @@ export const createUserProject = async (req: Request, res: Response) => {
 
 async function generateWebsite(projectId: string, userId: string, initial_prompt: string) {
     try {
-        const promptEnhanceResponse = await openai.chat.completions.create({
-            model: 'z-ai/glm-5.2:free',
-            messages: [
+        const promptEnhanceResponse = await createCompletion([
                 {
                     role: 'system',
                     content: `
@@ -105,10 +103,9 @@ async function generateWebsite(projectId: string, userId: string, initial_prompt
                     role: 'user',
                     content: initial_prompt
                 }
-            ]
-        })
+        ])
 
-        const enhancedPrompt = promptEnhanceResponse.choices[0].message.content;
+        const enhancedPrompt = promptEnhanceResponse;
 
         await prisma.conversation.create({
             data: {
@@ -126,9 +123,7 @@ async function generateWebsite(projectId: string, userId: string, initial_prompt
             }
         })
 
-        const codeGenerationResponse = await openai.chat.completions.create({
-            model: 'z-ai/glm-5.2:free',
-            messages: [
+        const codeGenerationResponse = await createCompletion([
                 {
                     role: 'system',
                     content: `
@@ -165,10 +160,9 @@ async function generateWebsite(projectId: string, userId: string, initial_prompt
                     role: 'user',
                     content: enhancedPrompt || ''
                 }
-            ]
-        })
+        ])
 
-        const code = codeGenerationResponse.choices[0].message.content || '';
+        const code = cleanCode(codeGenerationResponse);
 
         if (!code) {
             await prisma.conversation.create({
@@ -187,7 +181,7 @@ async function generateWebsite(projectId: string, userId: string, initial_prompt
 
         const version = await prisma.version.create({
             data: {
-                code: code.replace(/```[a-z]*\n?/gi, '').replace(/```$/g, '').trim(),
+                code,
                 description: 'Initial version',
                 projectId
             }
@@ -204,7 +198,7 @@ async function generateWebsite(projectId: string, userId: string, initial_prompt
         await prisma.websiteProject.update({
             where: { id: projectId },
             data: {
-                current_code: code.replace(/```[a-z]*\n?/gi, '').replace(/```$/g, '').trim(),
+                current_code: code,
                 current_version_index: version.id
             }
         })

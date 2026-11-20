@@ -1,6 +1,6 @@
 import { Request, Response } from 'express'
 import prisma from '../lib/prisma.js';
-import openai from '../configs/openai.js';
+import { createCompletion, cleanCode } from '../configs/openai.js';
 
 // Controller Function to Make Revision
 export const makeRevision = async (req: Request, res: Response) => {
@@ -50,9 +50,7 @@ export const makeRevision = async (req: Request, res: Response) => {
         })
 
         // Enhance user prompt
-        const promptEnhanceResponse = await openai.chat.completions.create({
-            model: 'z-ai/glm-5.2:free',
-            messages: [
+        const promptEnhanceResponse = await createCompletion([
                 {
                     role: 'system',
                     content: `
@@ -82,10 +80,9 @@ export const makeRevision = async (req: Request, res: Response) => {
                     role: 'user',
                     content: `User's request: "${message}"`
                 }
-            ]
-        })
+        ])
 
-        const enhancedPrompt = promptEnhanceResponse.choices[0].message.content;
+        const enhancedPrompt = promptEnhanceResponse;
 
         await prisma.conversation.create({
             data: {
@@ -103,9 +100,7 @@ export const makeRevision = async (req: Request, res: Response) => {
         })
 
         // Generate website code
-        const codeGenerationResponse = await openai.chat.completions.create({
-            model: 'z-ai/glm-5.2:free',
-            messages: [
+        const codeGenerationResponse = await createCompletion([
                 {
                     role: 'system',
                     content: `
@@ -123,13 +118,14 @@ export const makeRevision = async (req: Request, res: Response) => {
                 },
                 {
                     role: 'user',
-                    content: `
-                    Here is the current website code: "${currentProject.current_code}" The user wants this change: "${enhancedPrompt}"`
+                    content: currentProject.current_code
+                        ? `Here is the current website code: "${currentProject.current_code}" The user wants this change: "${enhancedPrompt}"`
+                        // Initial generation failed, so there is no code yet — build the site from scratch.
+                        : `There is no existing website yet. Create a complete website for this request: "${currentProject.initial_prompt}". Additional instructions: "${enhancedPrompt}"`
                 }
-            ]
-        })
+        ])
 
-        const code = codeGenerationResponse.choices[0].message.content || '';
+        const code = cleanCode(codeGenerationResponse);
 
         if (!code) {
             await prisma.conversation.create({
@@ -143,14 +139,12 @@ export const makeRevision = async (req: Request, res: Response) => {
                 where: { id: userId },
                 data: { credits: { increment: 5 } }
             })
-            return;
+            return res.status(502).json({ message: 'Unable to generate the code, please try again' });
         }
 
         const version = await prisma.version.create({
             data: {
-                code: code.replace(/```[a-z]*\n?/gi, '')
-                    .replace(/```$/g, '')
-                    .trim(),
+                code,
                 description: 'changes made',
                 projectId
             }
@@ -167,9 +161,7 @@ export const makeRevision = async (req: Request, res: Response) => {
         await prisma.websiteProject.update({
             where: { id: projectId },
             data: {
-                current_code: code.replace(/```[a-z]*\n?/gi, '')
-                    .replace(/```$/g, '')
-                    .trim(),
+                current_code: code,
                 current_version_index: version.id
             }
         })

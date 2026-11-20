@@ -8,6 +8,16 @@ import api from '@/configs/axios'
 import { toast } from 'sonner'
 import { authClient } from '@/lib/auth-client'
 
+// The server reports a failed background generation as an assistant message
+// (the project then has no code). Without this check the page would poll and
+// show the "Generating..." loader forever.
+const hasGenerationFailed = (project: Project) => {
+    if (project.current_code) return false;
+    const last = project.conversation[project.conversation.length - 1];
+    return last?.role === 'assistant' &&
+        (last.content.startsWith('Sorry, something went wrong') || last.content.startsWith('Unable to generate'));
+}
+
 const Projects = () => {
     const { projectId } = useParams()
     const navigate = useNavigate()
@@ -28,7 +38,7 @@ const Projects = () => {
         try {
             const { data } = await api.get(`/api/user/project/${projectId}`)
             setProject(data.project)
-            setIsGenerating(data.project.current_code ? false : true)
+            setIsGenerating(!data.project.current_code && !hasGenerationFailed(data.project))
             setLoading(false)
         } catch (error: any) {
             toast.error(error?.response?.data?.message || error.massage)
@@ -91,7 +101,7 @@ const Projects = () => {
 
 
     useEffect(() => {
-        if (project && !project.current_code) {
+        if (project && !project.current_code && !hasGenerationFailed(project)) {
             const intervalId = setInterval(fetchProject, 10000);
             return () => clearInterval(intervalId)
         }
